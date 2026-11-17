@@ -10,7 +10,7 @@ turns human decisions into automation eligibility.
 
 `data/seed/inbound_messages.jsonl` — **125** synthetic labelled inbound SMS
 bodies, regenerated deterministically by `scripts/generate_seed_dataset.py`.
-Clearly marked synthetic; not real the business customer data. Covers every intent
+Clearly marked synthetic; not real customer data. Covers every intent
 class plus adversarial rows (prompt injection, opt-out hidden in another message,
 contradictory, long multi-signal, ambiguous).
 
@@ -92,20 +92,43 @@ An intent is `eligible` when `sample ≥ graduation_min_sample` **and**
 `AutomationConfig`). Eligibility is a *recommendation*; enabling auto-send is a
 deliberate change to `AutomationConfig`, never automatic (DECISIONS D7).
 
-## 4. Cloud-vs-local readiness
+## 4. Cloud-vs-local readiness — and a live result
 
-`ProviderResponse` carries `model`, `latency_ms`, and `cost_usd`. The classifier
-and generator record `model_used` and latency into every trace. Swapping in a
-real `LLMProvider` and re-running `evaluate_classifier(MultiIntentClassifier(provider))`
-plus the operational metrics gives a like-for-like comparison of latency, cost,
-classification accuracy, and downstream human-approval rate. No assumption is
-baked in about which wins.
+`ProviderResponse` carries `model`, `latency_ms`, `cost_usd`, and token counts.
+The classifier and generator record `model_used` and latency into every trace.
+Real providers are implemented (OpenAI, OpenRouter, local OpenAI-compatible
+servers, Anthropic), so the comparison is now a command:
+
+```bash
+SMS_ENGINE_PROVIDER=openrouter SMS_ENGINE_MODEL=<model> sms-engine eval --mismatches
+```
+
+A live run through OpenRouter scored **0.984 exact match, 0.993 salient recall,
+0.996 macro-F1** (MockProvider: 0.976 / 0.987 / 0.992), and all 35 scenario
+checks passed through the full pipeline. The prompt was tuned once while looking
+at this same set, so treat it as a development-set score; a held-out set of real,
+labelled review outcomes (section 3) is the honest test. Full details, the model,
+the remaining mismatches, latency, and cost: [docs/LLM_EVAL_RESULTS.md](docs/LLM_EVAL_RESULTS.md).
+
+Two system properties do not depend on the provider's score and are tested with
+deliberately bad models (`tests/unit/test_model_independence.py`):
+
+- a model that never flags opt-outs still cannot cause an opt-out to be missed
+  (deterministic backstop, DECISIONS D16);
+- a model that is down cannot cause an automated send (rules fallback + forced
+  human review, `R_PROVIDER_DEGRADED`).
 
 ## 5. Running it
 
 ```bash
-python -m pytest tests/test_eval.py -q          # dataset coverage + quality floor
-python -c "import json; from sms_engine.eval.evaluator import evaluate_classifier as e; print(json.dumps(e().summary(), indent=2))"
+pytest tests/test_eval.py                        # dataset coverage + quality floor
+sms-engine eval --mismatches                     # the configured provider (default: mock)
+sms-engine eval --json > eval.json               # machine-readable
 curl localhost:8099/metrics
+curl localhost:8099/metrics/prometheus
 curl localhost:8099/eval/automation-eligibility
 ```
+
+The operational metrics now also report superseded reviews, campaign steps
+allowed and blocked (with the reasons), failed sends, analyses that failed safe,
+and planned responses and follow-ups by status.

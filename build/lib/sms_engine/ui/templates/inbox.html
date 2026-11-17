@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Inbox · SMS Engine{% endblock %}
+{% block body %}
+<h1>Review inbox</h1>
+
+{% if queue %}
+<div class="callout">
+  <span class="big">{{ queue|length }}</span>
+  <span>conversation{{ 's' if queue|length != 1 }} need a human decision, highest risk first.
+    Open one, read why the system flagged it and what it drafted, then approve, edit, suppress, or escalate.</span>
+</div>
+{% else %}
+<div class="callout none">
+  <span class="big">0</span>
+  <span>Nothing is waiting for a human. New flagged conversations will appear here.</span>
+</div>
+{% endif %}
+
+<div class="tablewrap"><table class="rowlink">
+  <tr><th>Risk</th><th>Contact</th><th>Message</th><th>Intents</th><th>Conf.</th><th>Recommended</th><th></th></tr>
+  {% for r in queue %}
+  {% set ints = r.model_classification.intents %}
+  <tr data-href="/ui/reviews/{{ r.id }}">
+    <td><span class="pill {{ 'bad' if r.risk_level in ['HIGH','CRITICAL'] else 'warn' }}">{{ r.risk_level }}</span></td>
+    <td class="mono">{{ r.contact_id }}</td>
+    <td>{% if r.kind and r.kind != 'REPLY' %}<span class="pill">{{ r.kind|lower }}</span> {{ r.generated_response }}{% else %}{{ r.customer_message }}{% endif %}</td>
+    <td class="small">
+      {# compact: top 2 intents + "+N"; the full list is on the review page #}
+      <span class="pills">
+        {% for i in ints[:2] %}<span class="pill">{{ i.type }} {{ '%.2f'|format(i.confidence) }}</span>{% endfor %}
+        {% if ints|length > 2 %}<span class="pill more">+{{ ints|length - 2 }} more</span>{% endif %}
+        {% if not ints %}<span class="small">—</span>{% endif %}
+      </span>
+    </td>
+    <td class="num">{{ '%.2f'|format(r.model_confidence) if r.model_confidence is not none else '—' }}</td>
+    <td class="route-{{ r.recommended_action }}">{{ r.recommended_action }}</td>
+    <td><a class="btn" href="/ui/reviews/{{ r.id }}">Review</a></td>
+  </tr>
+  {% endfor %}
+  {% if not queue %}<tr><td colspan="7" class="small">Nothing waiting for a human.</td></tr>{% endif %}
+</table></div>
+
+<h2>All conversations</h2>
+<div class="tablewrap"><table>
+  <tr><th>Contact</th><th>Name</th><th>Msgs</th><th>Suppression</th><th>Last routing</th><th></th></tr>
+  {% for c in conversations %}
+  <tr>
+    <td class="mono">{{ c.contact_id }}</td><td>{{ c.name or "—" }}</td><td>{{ c.messages }}</td>
+    <td>{% if c.suppressed %}<span class="pill bad">{{ c.suppression_reason }}</span>{% else %}—{% endif %}</td>
+    <td class="route-{{ c.last_routing }}">{{ c.last_routing or "—" }}</td>
+    <td><a class="btn" href="/ui/conversations/{{ c.id }}">Open</a></td>
+  </tr>
+  {% endfor %}
+</table></div>
+{% endblock %}

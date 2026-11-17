@@ -121,7 +121,59 @@ Chronological, honest record of what was built and its state.
   0.987 / macro-F1 0.992 (3 residual mismatches, all in the safe direction —
   documented in EVALUATION.md).
 
+## v0.2.0 — from prototype to service
+
+### Phase 19 — Review of the prototype
+- Read every module and test. Found safety bugs (stale reviews approvable, human
+  text validated against an empty policy, opt-out overwritable by a later
+  suppression, no send-time state check, 07:15 quiet-hours start), a race on the
+  shared SQLite connection, partial decisions on crash, and missing product
+  pieces (campaign sending, follow-up processing, real providers, transport,
+  auth, idempotency). Each fix is in CHANGELOG.md; the reasoning in DECISIONS
+  D11–D18.
+
+### Phase 20 — Storage
+- `SafeConnection`: statement-level lock, materialised results, nested
+  transactions. Migrations via `PRAGMA user_version` (v2: provider message id,
+  neighborhood, send attempts, review kinds, follow-up linkage, indexes).
+
+### Phase 21 — Pipeline and review safety
+- Store-first + atomic analysis + fail-safe review; idempotency on provider
+  message id; review superseding; `HUMAN_REVIEW_REQUIRED` events; opt-out upgrade
+  over a softer suppression; `outbound_guard(state)` for human text; approve-with-
+  edits recorded as an edit; `R_REPEATED_ISSUES`; staff issue resolution.
+
+### Phase 22 — Campaigns, follow-ups, sending
+- `campaign_check` + `CampaignService` (template copy, John gets his own link);
+  `FollowupService`; `SendWorker` (claim/send/finalise, state + quiet-hours
+  guards, retries, stuck-send recovery); `SmsTransport` (`log`, `twilio`);
+  timezone-aware send window; DB-backed variant history and timestamp de-dupe.
+
+### Phase 23 — Real model providers (parallel workstream)
+- `HTTPLLMProvider` with OpenAI-compatible, OpenRouter, local, and Anthropic
+  presets; prompts; JSON repair; retries; cost accounting; fail-safe wrappers;
+  `provider_from_env`. Live eval in `docs/LLM_EVAL_RESULTS.md`.
+- System-side: deterministic opt-out backstop, rules fallback during outages,
+  `R_PROVIDER_DEGRADED`.
+
+### Phase 24 — Service surface
+- Settings from env, automation config from TOML, API-key auth, dashboard Basic
+  auth + same-origin POST check + security headers, Twilio webhook with
+  signature verification, new endpoints, Prometheus metrics, background worker,
+  `sms-engine` CLI, structured logging.
+
+### Phase 25 — Dashboard
+- Review page rebuilt around the decision (plain-language reasons, live
+  validation, collapsible detail); campaign and issue actions on the
+  conversation page; flash messages; light/dark themes; responsive layout.
+
+### Phase 26 — Tooling and docs
+- Dockerfile, compose, Makefile, CI (ruff + pytest on 3.11–3.13 + demo + image
+  build). Tests 93 → 225. All documents updated; CHANGELOG added.
+
 ## Not done / integration points (honest)
-- Real LLM providers not wired (interface only).
-- SQLite single shared connection; no API auth; no real SMS transport.
+- No CRM connection (the `POST /jobs/completed` and `POST /events` endpoints are
+  the seams); opt-outs are not yet pushed to the provider suppression list or CRM.
+- SQLite: correct for one server process; multiple processes need Postgres.
 - Retrieval is keyword-overlap, not embeddings.
+- No per-client API-key tenancy, no rate limiting.

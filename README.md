@@ -1,8 +1,7 @@
-# SMS Conversation Intelligence Engine (Prototype)
+# SMS Conversation Intelligence Engine
 
-> Independent prototype by Fernando Garza. Not affiliated with any company.
-> All demo data is synthetic. No real customer data, no real SMS provider,
-> no real CRM, and no real language model are connected.
+> Independent project by Fernando Garza. Not affiliated with any company.
+> All demo data is synthetic. No real customer data is included.
 
 > The language model writes text. The system keeps the state, makes the
 > decisions, controls what the persona can say, and stops when a person must
@@ -19,174 +18,163 @@ You need Python 3.11 or a later version. You need no API key and no network.
 
 1. Install the project:
 
-   ```powershell
-   py -m venv .venv
-   .venv\Scripts\python.exe -m pip install -e ".[dev]"
+   ```bash
+   python -m venv .venv
+   source .venv/bin/activate          # Windows: .venv\Scripts\activate
+   pip install -e ".[dev]"
    ```
 
 2. Run the tests:
 
-   ```powershell
-   .venv\Scripts\python.exe -m pytest
+   ```bash
+   pytest
    ```
 
-3. Run the two failure cases:
+3. Run the two failure cases in the console:
 
-   ```powershell
-   .venv\Scripts\python.exe scripts\demo.py maya john
+   ```bash
+   sms-engine demo maya john
    ```
 
-4. Start the web dashboard:
+4. Start the web dashboard with demo data:
 
-   ```powershell
-   .venv\Scripts\python.exe scripts\demo.py --seed-db
-   .venv\Scripts\python.exe -m uvicorn sms_engine.api.app:get_app --factory --port 8099
+   ```bash
+   sms-engine seed-db
+   sms-engine serve
    ```
 
 5. Open `http://127.0.0.1:8099` in a browser.
 
-Section 12 explains the dashboard. Section 9 to section 13 give the full detail.
+You can also use `make install`, `make test`, `make demo`, `make seed`, and
+`make serve`. To run the service in a container, use `docker compose up --build`.
 
 ---
 
 ## 1. Purpose
 
-This repository is a working prototype. It shows a new conversation layer for the
-the SMS system.
+The project is a conversation layer for post-job SMS. After a completed job, a
+persona with the name "Agent" sends referral messages and review requests, and
+answers the customer.
 
-The SMS system sends referral messages and review requests after a
-completed job. A persona with the name "Agent" sends the messages.
-
-The prototype replaces three parts of the current design:
+The project replaces three parts of a common design:
 
 - fixed message templates
 - fixed campaign timers
 - a positive-or-negative sentiment test
 
-The prototype puts these parts in their place:
+The project puts these parts in their place:
 
-- one conversation record for each customer
+- one conversation record for each customer, built from an event log
 - a classifier that finds more than one intent in one message
 - a rule engine that makes every decision
 - replies that use the real conversation and approved facts
-- a safety check on every reply
+- a safety check on every outbound message, including human-approved text
+- a campaign gate that sends a review request or a referral message only when it is safe
 - a human review step
 - a measurement loop
 
-## 2. What the prototype is and is not
+## 2. The two failures that the project fixes
 
-The prototype **includes** these parts:
-
-- the conversation state model
-- the multi-intent classifier and the entity extractor
-- the policy engine and the suppression engine
-- the context layer and the retrieval step
-- the reply generator
-- the deterministic validators
-- the timing engine and the queue-invalidation logic
-- the human review service and a small web dashboard
-- the evaluation loop and the learning loop
-- an HTTP API
-- automated tests
-
-The prototype **does not include** these parts:
-
-- a connection to a real SMS provider
-- a connection to the CRM
-- a connection to the current campaign system or timer system
-- a production database
-- a large language model
-
-The model layer is `MockProvider`. `MockProvider` is a set of text rules. It is
-not a language model. The interfaces for a real model exist, but they are not
-connected. An inbound SMS is an HTTP request. An outbound SMS is a row in a local
-database.
-
-For the full list of limits and the plan to connect the real systems, read
-[HANDOFF.md](HANDOFF.md).
-
-## 3. The problem
-
-The current flow has this shape:
-
-```
-SMS provider
-   |
-campaign / timer
-   |
-template
-   |
-customer
-```
-
-The flow has these problems:
-
-- The timers are fixed. They do not react to the customer.
-- The sentiment test gives only "positive" or "negative".
-- The system keeps almost no memory of the conversation.
-- Each campaign node acts alone.
-
-Two real failures show the effect.
-
-### 3.1 Case 1 — Maya
+### 2.1 Maya
 
 The customer wrote that the crew was fantastic, but a wasp nest stopped the crew
 from clearing the junk near the grill.
 
-The current system marked the message as positive. It sent the referral message.
+The old system marked the message as positive. It sent the referral message.
 Later it sent a review request. The problem near the grill was still open.
 
-The correct behavior is:
+This project does these steps:
 
-1. Find the mixed sentiment.
-2. Find the open issue.
-3. Stop all campaign messages.
-4. Send the conversation to a human.
+1. It finds the mixed sentiment and the open issue.
+2. It stops all campaign messages for the customer.
+3. It sends the conversation to a human with a short draft reply.
+4. It refuses a later review request or referral ask while the issue is open.
+5. It refuses a human edit that adds a referral ask or a review request.
 
-### 3.2 Case 2 — John
+### 2.2 John
 
 The customer wrote that this is actually John, that everything went great, and
 that he will recommend the company.
 
-The current system did three things wrong:
+The old system ignored the name correction. It repeated the referral terms. It
+used the wrong personal referral link.
 
-1. It ignored the name correction.
-2. It repeated referral terms that the customer already accepted.
-3. It used the wrong personal referral link.
+This project does these steps:
 
-The correct behavior is to read one message as several intents, to update the
-record, and to reply with context.
+1. It reads one message as three intents.
+2. It records the name change (`Olivia` to `John`) and marks the referral as committed.
+3. It sends the reply to a human, because the name changed.
+4. When the campaign system asks for a referral pitch, it sends John's own
+   referral link instead. It builds the link from the client template and John's
+   contact id. It does not send the pitch again.
 
-## 4. How the system works
+## 3. How the system works
 
-The prototype processes each inbound message in nine steps:
+The system processes each inbound message in these steps:
 
-1. **Receive the event.** The API gets the message and stores it. The system adds
-   an event to the log.
-2. **Build the state.** The system builds the conversation record again from the
-   full event log. A late message cannot change an old record.
-3. **Classify the message.** The classifier returns every intent that it finds.
-   Each intent has a confidence value.
-4. **Extract the entities.** The system finds the issue, the location, the names,
-   the dates, and the opt-out words.
-5. **Apply the policy.** The rule engine reads the intents, the entities, and the
-   earlier state. It sets the route, the risk, the suppression, and the permitted
-   actions.
-6. **Retrieve the context.** The system selects the parts of the client context
-   pack that match the message. It marks an answer as grounded only when an
+1. **Receive the message.** The API or the SMS provider webhook delivers the
+   message. If the provider message id was seen before, the system returns the
+   earlier decision and does nothing more.
+2. **Store the message first.** The system stores the message and adds an event.
+   It cancels every queued reply and closes every open review that was written
+   for an older message.
+3. **Build the state.** The system builds the conversation record again from the
+   full event log.
+4. **Classify the message.** The classifier returns every intent that it finds,
+   each with a confidence value.
+5. **Extract the entities.** The system finds the issue, the location, the names,
+   the dates, and the opt-out words. A rule-based opt-out check runs on every
+   message. It does not depend on the model.
+6. **Apply the policy.** The rule engine sets the route, the risk, the
+   suppression, and the permitted actions.
+7. **Retrieve the context.** The system marks an answer as grounded only when an
    approved FAQ entry covers it.
-7. **Generate the reply.** The generator runs only on the automatic route. It
-   writes a short reply that uses the conversation.
-8. **Validate the reply.** The validators check the money terms, the links, the
-   claims, the promises, the length, and the opt-out rules. A reply that fails
-   goes back for one retry. If it fails again, it goes to a human.
+8. **Generate and validate.** The generator writes a short reply. The validators
+   check money terms, links, claims, promises, length, opt-out rules, and
+   campaign rules. A reply that fails goes back for one retry, then to a human.
 9. **Route the result.** The system puts the reply in the timed send queue, or it
    opens a human review item.
+
+If any step fails, the system rolls back the analysis, keeps the message, and
+opens a high-risk review. An error never sends a message and never loses one.
 
 The route is one of four values: automatic reply, human review, suppress, or
 escalate. When the signals conflict, the system selects human review.
 
-## 5. Global suppression
+## 4. Sending
+
+A background worker sends the queued messages. Before each send it does these
+checks again:
+
+- A newer customer message makes the reply stale. The worker cancels it.
+- An opt-out cancels every message. A new suppression cancels every automatic message.
+- An open issue cancels every campaign message and follow-up message.
+- Outside the send window in the customer's local time, the worker moves the
+  message to the next morning.
+
+The default send window is 08:15 to 20:30 local time. The window uses the
+client's IANA timezone, so daylight saving time is correct. No send time ends
+in ":00" or ":30", and no two send times are the same.
+
+The `log` transport records the message and sends nothing. The `twilio`
+transport sends the message through Twilio. If the provider fails, the worker
+tries again with a longer wait each time. After the last attempt, it marks the
+message as failed.
+
+## 5. Campaign steps
+
+The campaign system asks for a step. The engine decides if the step is safe.
+
+| Step | The engine refuses the step when |
+|---|---|
+| `review_request` | the contact opted out or is suppressed, an issue is open, a review is open, or the review link was already sent |
+| `referral_ask` | the same conditions, or the referral terms were already sent. If the customer already said that they will refer, the engine sends `referral_link` instead |
+| `referral_link` | the same conditions, or the link was already sent |
+
+The campaign text comes from client-approved templates, not from the model. The
+validators check it like every other message.
+
+## 6. Global suppression
 
 Suppression is a property of the customer. It is not a setting on one campaign
 node.
@@ -194,163 +182,185 @@ node.
 When the customer has an open issue, a complaint, an opt-out, a wrong-number
 message, or an escalation, the system stops all campaign actions for that
 customer. An opt-out also stops all outbound messages. An opt-out is permanent.
-The system does not release it.
+A later suppression or a release request cannot change it.
 
-## 6. Timing and the message race
+When two issues are open at the same time, the system escalates the contact.
+Staff can mark an issue as resolved on the conversation page.
 
-The timing engine is separate from the model. A seeded random generator makes it
-repeatable in tests.
+## 7. Human review
 
-The rules are:
+The review page shows the decision first: the customer message, the reasons in
+plain language, and the draft reply. The thread, the intents, the entities, and
+the decision trace are below it.
 
-- A short message gets a short delay.
-- A complex message gets a longer delay.
-- A message that arrives at night waits for the morning window.
-- No send time ends in ":00" or ":30".
-- No two send times are the same.
+The reviewer can send, edit and send, reject, suppress, or escalate. The page
+checks the text while the reviewer types. The server checks the text again
+against the current conversation state. Approval does not skip the checks.
 
-The system also handles this race:
+The system stores every decision as evaluation data. If the reviewer changes the
+text and selects "Send reply", the system records an edit, not an approval.
 
-1. Message 1 arrives. The system queues a reply for a later time.
-2. Message 2 arrives before the send time.
-3. The system marks the queued reply as not valid.
-4. The system builds the state again, classifies again, and makes a new decision.
+Follow-ups come from needs that the customer volunteered, for example "my
+daughter is moving next spring". When a follow-up is due, the system writes a
+draft. A person must approve each follow-up.
 
-The send worker checks the version again at send time. A stale reply cannot reach
-the customer.
+## 8. The language model
 
-## 7. Human review and learning
+| `SMS_ENGINE_PROVIDER` | Model |
+|---|---|
+| `mock` (default) | A transparent rule engine. No network. All tests and the demo use it. |
+| `openai` | OpenAI chat completions |
+| `openrouter` | OpenRouter (many hosted models) |
+| `local` | An OpenAI-compatible local server, for example Ollama, vLLM, or LM Studio |
+| `anthropic` | The Anthropic Messages API |
 
-A human review item shows the reviewer these fields: the customer, the current
-message, the full thread, the intents, the entities, the state, the client
-context, the risk, the recommended action, the draft reply, and the decision
-trace.
+Set `SMS_ENGINE_MODEL` and `SMS_ENGINE_API_KEY` for the selected provider. If the
+model fails, the rule engine classifies the message and the message goes to a
+human. The model never makes a decision.
 
-The reviewer can approve, edit and send, reject, suppress, or escalate. The
-system validates human-edited text with the same checks. Approval does not skip
-the checks.
+To score a provider on the labelled data set:
 
-The system stores every decision. Each record holds the model classification, the
-model confidence, the draft reply, the human action, the human edits, and the
-final reply. The learning loop reads these records. For each intent, it reports
-whether the approval rate over a minimum sample is high enough for automatic
-send. The operator must still turn on automatic send by hand.
+```bash
+SMS_ENGINE_PROVIDER=openrouter SMS_ENGINE_MODEL=<model> sms-engine eval --mismatches
+```
 
-## 8. Repository layout
+[docs/LLM_EVAL_RESULTS.md](docs/LLM_EVAL_RESULTS.md) gives the result for a live model.
+
+## 9. Configuration
+
+All settings are environment variables. [.env.example](.env.example) lists them.
+The important ones are:
+
+| Variable | Function |
+|---|---|
+| `SMS_ENGINE_DB` | The SQLite file. |
+| `SMS_ENGINE_API_KEYS` | API keys for the JSON API. Set this in every shared environment. |
+| `SMS_ENGINE_UI_PASSWORD` | The password for the review dashboard (HTTP Basic). |
+| `SMS_ENGINE_PROVIDER`, `SMS_ENGINE_MODEL`, `SMS_ENGINE_API_KEY` | The language model. |
+| `SMS_ENGINE_TRANSPORT` | `log` or `twilio`. |
+| `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` | Twilio credentials. The token also verifies the webhook signature. |
+| `SMS_ENGINE_PUBLIC_URL` | The public URL that Twilio calls. It is necessary behind a proxy. |
+| `SMS_ENGINE_WORKER_INTERVAL` | Seconds between worker passes in the server process. `0` disables the worker. |
+| `SMS_ENGINE_AUTOMATION_CONFIG` | The automation file. |
+
+The automation file controls which intents can send automatically, the
+confidence floor, the escalation limit, the campaign review setting, and the
+retry limits. Copy [config/automation.example.toml](config/automation.example.toml)
+to `config/automation.toml`. Make sure that the file is correct:
+
+```bash
+sms-engine check-config config/automation.toml
+```
+
+## 10. Connect an SMS provider (Twilio)
+
+1. Set `SMS_ENGINE_TRANSPORT=twilio`, `TWILIO_ACCOUNT_SID`, and `TWILIO_AUTH_TOKEN`.
+2. Add the Twilio number to the client pack: `config.phone_numbers` and `config.sms_from_number`.
+3. Set the messaging webhook of the number to `https://<your host>/webhooks/twilio/sms` (HTTP POST).
+4. Set `SMS_ENGINE_PUBLIC_URL` to `https://<your host>`.
+5. Run the worker: `SMS_ENGINE_WORKER_INTERVAL=15` in the server, or `sms-engine worker` in a separate process.
+
+The webhook rejects a request with a wrong signature. It does not process the
+same `MessageSid` two times. Replies go through the timed, validated send queue.
+They never go back inline in the webhook response.
+
+## 11. Command line
+
+| Command | Function |
+|---|---|
+| `sms-engine serve` | Start the API and the dashboard (port 8099). |
+| `sms-engine worker [--once]` | Send due messages and process due follow-ups. |
+| `sms-engine demo [names]` | Run scenarios A to G in the console with decision traces. |
+| `sms-engine seed-db` | Write a demo database that shows every flow. |
+| `sms-engine eval [--mismatches]` | Score the configured model on the labelled data set. |
+| `sms-engine ingest-client <file>` | Add a client context pack. |
+| `sms-engine check-config [file]` | Make sure that an automation file is correct. |
+| `sms-engine migrate` | Create or upgrade the database schema. |
+
+## 12. API endpoints
+
+The interactive API documentation is at `/docs`. When `SMS_ENGINE_API_KEYS` is
+set, send a key in the `X-API-Key` header or as `Authorization: Bearer <key>`.
+
+| Method and path | Function |
+|---|---|
+| `POST /messages/inbound` | Process one inbound SMS. Return the full decision. `provider_message_id` makes the call idempotent. |
+| `POST /webhooks/twilio/sms` | The Twilio inbound webhook (signature-verified). |
+| `POST /jobs/completed` | Record a completed job, before any SMS. |
+| `POST /events` | Add an external event (`JOB_COMPLETED`, `CAMPAIGN_TRIGGERED`, `SUPPRESSION_ACTIVATED`, `ESCALATED`). |
+| `POST /conversations/{id}/campaigns` | Request a campaign step. `dry_run` shows the decision and writes nothing. |
+| `POST /process-due` | Send every message that is due. |
+| `POST /process-followups` | Turn due follow-ups into review items. |
+| `POST /worker/run` | Do one full worker pass. |
+| `GET /outbound` | List recent planned and sent messages. |
+| `GET /conversations` | List the conversations. Filters: `client_id`, `status`, `limit`, `offset`. |
+| `GET /conversations/{id}` | Return one conversation with its state, messages, events, and outbound history. |
+| `GET /conversations/{id}/state` | Return the conversation state. |
+| `GET /conversations/{id}/trace` | Return the decision trace. |
+| `POST /conversations/{id}/review` | Decide the newest open review for this conversation. |
+| `POST /conversations/{id}/suppress` | Suppress this conversation and cancel its queue. |
+| `POST /conversations/{id}/release` | Release the suppression. The system refuses this call after an opt-out. |
+| `POST /conversations/{id}/issues/{issue_id}/resolve` | Mark an issue as resolved. |
+| `GET /review-queue` | List the open reviews, highest risk first. |
+| `GET /reviews/{id}` | Return the full review payload. |
+| `POST /reviews/{id}/validate` | Check a reply text without a decision. |
+| `POST /reviews/{id}/decision` | Submit a review decision. |
+| `GET /metrics` | Return the operational metrics. |
+| `GET /metrics/prometheus` | Return the metrics in Prometheus text format. |
+| `GET /eval/classifier` | Return the classifier evaluation. |
+| `GET /eval/automation-eligibility` | Return the automation eligibility per intent. |
+| `GET /config/automation` | Return the active automation configuration. |
+| `GET /clients`, `POST /clients`, `GET /clients/{id}` | List, add, and read client context packs. |
+| `GET /health` | Return the service status. It needs no key. |
+
+## 13. Repository layout
 
 ```
 src/sms_engine/
   domain/          data models: state, intents, entities, events, policy, validation, trace
-  policy/          the deterministic policy engine and suppression engine
-  ai/              the LLMProvider interface, MockProvider, classifier, extractor, generator
+  policy/          the policy engine, the suppression and campaign gates, the opt-out backstop
+  ai/              the LLMProvider interface, MockProvider, the HTTP model providers, prompts
   context/         client context ingestion and retrieval
   validation/      the deterministic validator battery
-  application/     the pipeline, the state machine, review, timing, queue, metrics
-  infrastructure/  SQLite storage, clock, seeded RNG, id factory
-  eval/            dataset loader, classifier scoring, operational metrics, thresholds
+  application/     pipeline, review, campaigns, follow-ups, send worker, timing, settings
+  infrastructure/  SQLite storage and migrations, SMS transports, clock, RNG, logging
+  eval/            data set loader, classifier scoring, operational metrics, thresholds
   api/             the FastAPI application
   ui/              the server-rendered review dashboard
-data/
-  clients/         one sample client context pack
-  seed/            125 synthetic labelled inbound messages, for evaluation only
-scripts/           demo.py, generate_seed_dataset.py
-tests/             unit, integration, end-to-end, adversarial, API
+  cli.py           the sms-engine command
+config/            automation.example.toml
+data/clients/      one sample client context pack
+data/seed/         125 synthetic labelled inbound messages, for evaluation only
+docs/              LLM_EVAL_RESULTS.md
+scripts/           demo.py, eval_llm.py, generate_seed_dataset.py
+tests/             unit, integration, end-to-end, adversarial, API, CLI
 ```
 
-## 9. How to install
+## 14. Tests and evaluation
 
-You need Python 3.11 or a later version.
-
-```powershell
-py -m venv .venv
-.venv\Scripts\python.exe -m pip install -e ".[dev]"
+```bash
+pytest                     # 225 tests, offline and deterministic
+pytest --cov               # with coverage
+ruff check src tests scripts
 ```
 
-The prototype needs no API key. The prototype needs no network.
+The classifier runs against 125 synthetic labelled messages:
 
-## 10. How to run the tests
+| Model | Exact match | Salient recall | Macro F1 |
+|---|---:|---:|---:|
+| `MockProvider` (rules) | 0.976 | 0.987 | 0.992 |
+| Live LLM through OpenRouter (see the results file) | 0.984 | 0.993 | 0.996 |
 
-```powershell
-.venv\Scripts\python.exe -m pytest
-```
-
-The result is `93 passed`. The tests are deterministic and offline.
-
-## 11. How to run the demonstration
-
-To run all scenarios with the decision trace for each step:
-
-```powershell
-.venv\Scripts\python.exe scripts\demo.py
-```
-
-To run only the two failure cases:
-
-```powershell
-.venv\Scripts\python.exe scripts\demo.py maya john
-```
-
-## 12. How to start the web dashboard
-
-1. Create the demo database:
-
-   ```powershell
-   .venv\Scripts\python.exe scripts\demo.py --seed-db
-   ```
-
-2. Start the server:
-
-   ```powershell
-   .venv\Scripts\python.exe -m uvicorn sms_engine.api.app:get_app --factory --port 8099
-   ```
-
-3. Open `http://127.0.0.1:8099` in a browser.
-
-The dashboard has no authentication. Use it on your machine only.
-
-## 13. API endpoints
-
-| Method and path | Function |
-|---|---|
-| `POST /messages/inbound` | Process one inbound SMS. Return the full decision. |
-| `POST /events` | Add a job or campaign event. |
-| `POST /process-due` | Send every reply that is due. |
-| `GET /conversations` | List the conversations. |
-| `GET /conversations/{id}` | Return one conversation with its state, messages, and events. |
-| `GET /conversations/{id}/state` | Return the conversation state. |
-| `GET /conversations/{id}/trace` | Return the decision trace. |
-| `POST /conversations/{id}/review` | Decide the open review for this conversation. |
-| `POST /conversations/{id}/suppress` | Suppress this conversation. |
-| `POST /conversations/{id}/release` | Release the suppression. The system refuses this call after an opt-out. |
-| `GET /review-queue` | List the open reviews, highest risk first. |
-| `GET /reviews/{id}` | Return the full review payload. |
-| `POST /reviews/{id}/decision` | Submit a review decision. |
-| `GET /metrics` | Return the operational metrics. |
-| `GET /eval/classifier` | Return the classifier evaluation. |
-| `GET /eval/automation-eligibility` | Return the automation eligibility per intent. |
-| `GET /clients` | List the client context packs. |
-| `POST /clients` | Add a client context pack. |
-| `GET /health` | Return the service status. |
-
-## 14. Evaluation results
-
-The classifier runs against 125 synthetic labelled messages. The current scores
-are:
-
-- exact match: 0.976
-- salient recall: 0.987
-- macro F1: 0.992
-
-`MockProvider` produces these scores. `MockProvider` is a rule engine. A real
-model gets a new score from the same tool. See [EVALUATION.md](EVALUATION.md) for
-the method.
+The live score is a development-set score: the prompt was tuned on the same
+data. See [EVALUATION.md](EVALUATION.md) for the method.
 
 ## 15. Limits
 
-- The storage is one SQLite file with one shared connection.
-- The API and the dashboard have no authentication.
-- There is no SMS transport and no CRM link.
+- The storage is one SQLite file. It is correct for one server process. For more
+  than one process, move the repositories to Postgres (see [HANDOFF.md](HANDOFF.md)).
 - The retrieval uses word overlap. It does not use vector search.
+- There is no CRM connection. The `POST /jobs/completed` and `POST /events`
+  endpoints are the connection points.
 - The seed data is synthetic. It is not real customer data.
 
 ## 16. Related documents
@@ -360,11 +370,10 @@ the method.
 - [EVALUATION.md](EVALUATION.md) — the measurement method
 - [SECURITY.md](SECURITY.md) — the threat model and the controls
 - [DEMO.md](DEMO.md) — a walk-through of the demonstration
-- [HANDOFF.md](HANDOFF.md) — the prototype boundary and the integration plan
+- [HANDOFF.md](HANDOFF.md) — the production boundary and the integration plan
+- [CHANGELOG.md](CHANGELOG.md) — the changes in each version
 - [IMPLEMENTATION_LOG.md](IMPLEMENTATION_LOG.md) — the build log
 
 ## 17. License and author
 
-Author: Fernando Garza.
-
-This is a prototype for evaluation. It is not production software.
+Author: Fernando Garza. License: MIT.
