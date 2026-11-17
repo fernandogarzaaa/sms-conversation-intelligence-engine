@@ -18,3 +18,5 @@ sms_engine.db-shm
 .coverage
 htmlcov/
 config/automation.toml
+build/
+dist/
