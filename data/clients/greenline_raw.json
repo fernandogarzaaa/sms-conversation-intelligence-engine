@@ -1,0 +1,49 @@
+{
+  "client_id": "greenline",
+  "name": "Greenline Movers & Junk Removal",
+  "sources": ["website:greenline.example/about", "faq:greenline.example/faq", "config:onboarding-form", "sample_replies:review-inbox-export"],
+  "website_text": "Greenline Movers & Junk Removal\nLocal moving and junk hauling done right.\nHours: Mon-Sat 7am-7pm, closed Sunday\nService area: Austin, Round Rock, Pflugerville, Cedar Park, Georgetown\nWe are licensed and insured. Same-week booking is usually available.\n",
+  "faq": [
+    {"id": "faq_pianos", "question": "Do you move pianos or other heavy specialty items?", "answer": "We move upright pianos with advance notice; grand pianos we refer to a specialty partner. Let me know the type and I'll get you a firm answer.", "approved": true},
+    {"id": "faq_area", "question": "What areas do you serve?", "answer": "We cover Austin, Round Rock, Pflugerville, Cedar Park, and Georgetown.", "approved": true},
+    {"id": "faq_hours", "question": "What are your hours?", "answer": "We run Monday through Saturday, 7am to 7pm, and we're closed Sundays.", "approved": true},
+    {"id": "faq_junk_what", "question": "What junk will you take and what won't you take?", "answer": "We take furniture, appliances, yard debris, and general household clutter. We can't take hazardous waste, wet paint, or chemicals.", "approved": true},
+    {"id": "faq_quote", "question": "How do I get a quote or price estimate?", "answer": "Pricing depends on volume and access, so the office puts together a written estimate after a quick photo or call. I can have someone reach out.", "approved": false}
+  ],
+  "config": {
+    "persona_name": "Agent",
+    "brand_voice": "Warm, concise, professional. First person as Agent. Plain language, no hype, no emojis, at most one exclamation mark.",
+    "services": ["local moving", "junk removal", "furniture hauling", "light packing"],
+    "booking_policy": "Bookings and reschedules go through the office; Agent does not confirm crews or times directly.",
+    "referral_program": {
+      "description": "Refer a friend or neighbor who books a job.",
+      "reward_text": "a thank-you gift from the team",
+      "referral_link_template": "https://ref.greenline.example/{contact_id}",
+      "terms_summary": "Reward sends after the referred job is completed and paid. One reward per referred household."
+    },
+    "review_link": "https://g.page/greenline-movers/review",
+    "crew_names": ["Marcus", "Dee", "Tavi", "Sam"],
+    "escalation_rules": [
+      "Any mention of property damage, injury, billing dispute, or legal action goes to a human immediately.",
+      "Two or more unresolved issues on one contact escalates."
+    ],
+    "forbidden_claims": [
+      "we guarantee", "guaranteed", "best in town", "cheapest", "we beat any price",
+      "100% satisfaction", "fully bonded", "we never", "always on time"
+    ],
+    "approved_phrases": [
+      "Glad the crew took care of everything.",
+      "I've flagged that for the team.",
+      "Thanks for letting us know.",
+      "The office will follow up with you.",
+      "Really appreciate you spreading the word."
+    ],
+    "allowed_url_domains": ["ref.greenline.example", "g.page"],
+    "max_sms_chars": 320,
+    "synthetic": true
+  },
+  "sample_replies": [
+    "Glad the crew took care of everything - thanks for the note.",
+    "Thanks for flagging that. I've passed it to the team and the office will follow up."
+  ]
+}

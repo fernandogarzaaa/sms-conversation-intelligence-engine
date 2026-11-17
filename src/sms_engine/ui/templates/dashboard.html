@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · the SMS Engine{% endblock %}
+{% block body %}
+<h1>Dashboard</h1>
+
+{% if queue %}
+<div class="callout">
+  <span class="big">{{ queue|length }}</span>
+  <span>conversation{{ 's' if queue|length != 1 }} waiting for a human decision.
+    Highest risk first — open one to approve, edit, suppress, or escalate the drafted reply.</span>
+  <a class="btn cta" href="/ui/inbox">Go to review inbox →</a>
+</div>
+{% else %}
+<div class="callout none">
+  <span class="big">0</span>
+  <span>Nothing is waiting for a human right now. Simulate an inbound SMS below to see the pipeline run.</span>
+</div>
+{% endif %}
+
+<h2>Review queue ({{ queue|length }})</h2>
+<table class="rowlink">
+  <tr><th>Risk</th><th>Contact</th><th>Message</th><th>Recommended</th><th></th></tr>
+  {% for r in queue %}
+  <tr data-href="/ui/reviews/{{ r.id }}">
+    <td><span class="pill {{ 'bad' if r.risk_level in ['HIGH','CRITICAL'] else 'warn' }}">{{ r.risk_level }}</span></td>
+    <td class="mono">{{ r.contact_id }}</td>
+    <td>{{ r.customer_message }}</td>
+    <td class="route-{{ r.recommended_action }}">{{ r.recommended_action }}</td>
+    <td><a class="btn" href="/ui/reviews/{{ r.id }}">Review</a></td>
+  </tr>
+  {% endfor %}
+  {% if not queue %}<tr><td colspan="5" class="small">Queue empty.</td></tr>{% endif %}
+</table>
+
+<h2>Conversations</h2>
+<table>
+  <tr><th>Contact</th><th>Name</th><th>Msgs</th><th>Open issues</th><th>Suppression</th><th>Last routing</th><th></th></tr>
+  {% for c in conversations %}
+  <tr>
+    <td class="mono">{{ c.contact_id }}</td>
+    <td>{{ c.name or "—" }}</td>
+    <td>{{ c.messages }}</td>
+    <td>{{ c.open_issues }}</td>
+    <td>{% if c.suppressed %}<span class="pill bad">{{ c.suppression_reason }}</span>{% else %}<span class="pill">no</span>{% endif %}</td>
+    <td class="route-{{ c.last_routing }}">{{ c.last_routing or "—" }}</td>
+    <td><a class="btn" href="/ui/conversations/{{ c.id }}">Open</a></td>
+  </tr>
+  {% endfor %}
+</table>
+
+<h2>Simulate an inbound SMS</h2>
+<form class="inline" method="post" action="/ui/simulate">
+  <input type="text" name="contact_id" placeholder="contact_id" value="demo_contact" required>
+  <input type="text" name="text" placeholder="customer message" size="52" required>
+  <input type="text" name="neighborhood" placeholder="neighborhood (optional)">
+  <button type="submit">Send</button>
+</form>
+<form class="inline" method="post" action="/ui/process-due" style="margin-top:10px">
+  <button class="ghost" type="submit">Process due send-queue</button>
+</form>
+
+<h2>Operational metrics</h2>
+<div class="grid cards">
+  <div class="card"><div class="n">{{ metrics.messages_processed }}</div><div class="l">Messages processed</div></div>
+  <div class="card"><div class="n">{{ metrics.automation_rate|pct }}</div><div class="l">Automation rate</div></div>
+  <div class="card"><div class="n">{{ metrics.human_review_rate|pct }}</div><div class="l">Human review rate</div></div>
+  <div class="card"><div class="n">{{ metrics.suppression_rate|pct }}</div><div class="l">Suppression rate</div></div>
+  <div class="card"><div class="n">{{ metrics.approval_rate|pct }}</div><div class="l">Approval rate</div></div>
+  <div class="card"><div class="n">{{ metrics.edit_rate|pct }}</div><div class="l">Edit rate</div></div>
+  <div class="card"><div class="n">{{ metrics.avg_classification_confidence|round2 }}</div><div class="l">Avg classifier conf.</div></div>
+  <div class="card"><div class="n">{{ metrics.avg_pipeline_latency_ms|round2 }} ms</div><div class="l">Avg pipeline latency</div></div>
+  <div class="card"><div class="n">{{ metrics.responses_invalidated }}</div><div class="l">Responses invalidated</div></div>
+  <div class="card"><div class="n">{{ metrics.followups_scheduled }}</div><div class="l">Follow-ups scheduled</div></div>
+</div>
+
+<h2>Routing breakdown</h2>
+<table>
+  <tr><th>Routing</th><th>Count</th></tr>
+  {% for k, val in metrics.routing_breakdown.items() %}
+  <tr><td class="route-{{k}}">{{ k }}</td><td>{{ val }}</td></tr>
+  {% endfor %}
+</table>
+
+<h2>Classifier evaluation (synthetic dataset, n={{ classifier.n }}, model={{ classifier.model }})</h2>
+<div class="grid cards">
+  <div class="card"><div class="n">{{ classifier.exact_match_rate|pct }}</div><div class="l">Exact match</div></div>
+  <div class="card"><div class="n">{{ classifier.salient_recall|pct }}</div><div class="l">Salient recall</div></div>
+  <div class="card"><div class="n">{{ classifier.macro_f1|round2 }}</div><div class="l">Macro F1</div></div>
+</div>
+<table>
+  <tr><th>Intent</th><th>Support</th><th>Precision</th><th>Recall</th><th>F1</th></tr>
+  {% for name, s in classifier.per_intent.items() %}
+  <tr><td class="mono">{{ name }}</td><td>{{ s.support }}</td><td>{{ s.precision }}</td><td>{{ s.recall }}</td><td>{{ s.f1 }}</td></tr>
+  {% endfor %}
+</table>
+
+<h2>Automation eligibility (learning loop)</h2>
+<table>
+  <tr><th>Intent</th><th>Sample</th><th>Approved (no edit)</th><th>Approval rate</th><th>Enabled</th><th>Recommendation</th></tr>
+  {% for e in eligibility %}
+  <tr>
+    <td class="mono">{{ e.intent }}</td>
+    <td>{{ e.sample }}</td>
+    <td>{{ e.approvals_no_edit }}</td>
+    <td>{{ e.approval_rate_no_edit }}</td>
+    <td>{% if e.currently_enabled %}<span class="pill good">on</span>{% else %}<span class="pill">off</span>{% endif %}</td>
+    <td class="small">{{ e.recommendation }}</td>
+  </tr>
+  {% endfor %}
+  {% if not eligibility %}<tr><td colspan="6" class="small">No decided reviews yet — decide some in the inbox to populate this.</td></tr>{% endif %}
+</table>
+{% endblock %}

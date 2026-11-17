@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}Review · the SMS Engine{% endblock %}
+{% block body %}
+{% set r = d.review %}
+<h1>Review — <span class="mono">{{ d.contact_id }}</span>
+  <span class="pill {{ 'bad' if r.risk_level in ['HIGH','CRITICAL'] else 'warn' }}">{{ r.risk_level }}</span>
+  <span class="pill accent">recommended: {{ r.recommended_action }}</span>
+</h1>
+
+<div class="two">
+  <div>
+    <h2>Conversation</h2>
+    <div class="thread">
+      {% for m in d.conversation.messages %}
+        <div class="msg {{ 'IN' if m.direction == 'INBOUND' else 'OUT' }}">
+          {{ m.raw_text }}
+          <div class="t">{{ m.direction }} · {{ m.created_at }}</div>
+        </div>
+      {% endfor %}
+    </div>
+
+    <h2>Current message</h2>
+    <div class="card">{{ d.customer_message }}</div>
+
+    <h2>Detected intents</h2>
+    <div>
+      {% for i in r.model_classification.intents %}
+        <span class="pill">{{ i.type }} · {{ i.confidence }}</span>
+      {% endfor %}
+    </div>
+
+    <h2>Extracted entities</h2>
+    <div class="kv">
+      {% for k, val in d.trace.entities.items() if val not in [none, "", false, []] and k not in ['raw','model_used','latency_ms'] %}
+        <div>{{ k }}</div><div class="mono">{{ val }}</div>
+      {% endfor %}
+    </div>
+
+    <h2>Decision trace</h2>
+    <div class="trace mono">{{ d.trace.rendered }}</div>
+  </div>
+
+  <div>
+    <h2>Conversation state</h2>
+    <div class="kv">
+      <div>identity</div><div class="mono">{{ d.conversation.state.identity.name or "—" }}
+        {% if d.conversation.state.identity.previous_name %}(was {{ d.conversation.state.identity.previous_name }}){% endif %}</div>
+      <div>referral status</div><div class="mono">{{ d.conversation.state.referral_status }}</div>
+      <div>open issues</div><div class="mono">{{ d.conversation.state.open_issues|length }}</div>
+      <div>offers presented</div><div class="mono">{{ d.conversation.state.offers_presented|map(attribute='kind')|list|join(', ') or "—" }}</div>
+      <div>suppression</div><div class="mono">{{ d.conversation.state.suppression.reason or "none" }}</div>
+      <div>future intents</div><div class="mono">{{ d.conversation.state.future_intents|length }}</div>
+      <div>campaign status</div><div class="mono">{{ d.conversation.state.campaign_status }}</div>
+      <div>event version</div><div class="mono">{{ d.conversation.state.version }}</div>
+    </div>
+
+    <h2>Policy</h2>
+    <div class="kv">
+      <div>routing</div><div class="route-{{ d.trace.policy.routing }} mono">{{ d.trace.policy.routing }}</div>
+      <div>risk</div><div class="mono">{{ d.trace.policy.risk }}</div>
+      <div>forbidden</div><div class="mono">{{ d.trace.policy.forbidden_actions|join(', ') or "—" }}</div>
+      <div>allowed</div><div class="mono">{{ d.trace.policy.allowed_actions|join(', ') or "—" }}</div>
+    </div>
+    <div class="small" style="margin-top:6px">{{ d.trace.policy.summary }}</div>
+
+    <h2>Client context</h2>
+    <div class="kv">
+      <div>brand voice</div><div class="small">{{ d.client_context.brand_voice }}</div>
+      <div>review link</div><div class="mono">{{ d.client_context.review_link }}</div>
+      <div>forbidden claims</div><div class="small">{{ d.client_context.forbidden_claims|join(', ') }}</div>
+    </div>
+
+    <h2>Generated response (draft)</h2>
+    <form method="post" action="/ui/reviews/{{ r.id }}/decide">
+      <textarea name="edited_text">{{ r.generated_response or "" }}</textarea>
+      <div class="small">
+        {% if d.trace.validation and d.trace.validation.findings %}
+          {% for f in d.trace.validation.findings %}
+            <span class="pill {{ 'bad' if f.severity=='reject' else 'warn' }}">{{ f.code }}: {{ f.message }}</span>
+          {% endfor %}
+        {% else %}<span class="pill good">validators passed</span>{% endif %}
+      </div>
+      <input type="text" name="reviewer" value="reviewer" style="margin-top:8px">
+      <input type="text" name="notes" placeholder="notes (optional)" size="40">
+      <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+        <button name="action" value="APPROVE">Approve</button>
+        <button name="action" value="EDIT_AND_SEND" class="ghost">Edit &amp; Send</button>
+        <button name="action" value="REJECT" class="ghost">Reject</button>
+        <button name="action" value="SUPPRESS" class="bad">Suppress</button>
+        <button name="action" value="ESCALATE" class="bad">Escalate</button>
+      </div>
+    </form>
+    <p class="small">Every decision here is stored as evaluation data: model classification, model
+    confidence, generated response, human action, human edits, final response.</p>
+  </div>
+</div>
+{% endblock %}

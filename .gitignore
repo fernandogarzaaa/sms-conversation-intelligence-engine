@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+sms_engine.db
+sms_engine.db-wal
+sms_engine.db-shm
+*.db-wal
+*.db-shm
+.DS_Store
+.claude/
+.env
+.env.*
+*.db
