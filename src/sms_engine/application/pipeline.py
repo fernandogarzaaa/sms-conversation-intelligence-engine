@@ -49,6 +49,19 @@ from sms_engine.validation.engine import ValidationContext
 _RESOLUTION_MARKERS = ("resolved", "fixed now", "taken care of", "sorted out", "all good now", "came back and")
 
 
+def _injection_flagged(classification: Classification) -> bool:
+    """Parse the classifier's `_flags` field (``"k=v,k=v"``) instead of
+    substring-matching it. A substring match breaks the moment a flag value
+    contains the needle, or a new flag is added before it."""
+    flags_raw = (classification.entities or {}).get("_flags", "")
+    flags = dict(
+        part.split("=", 1)
+        for part in flags_raw.split(",")
+        if "=" in part
+    )
+    return flags.get("possible_prompt_injection") == "True"
+
+
 @dataclass
 class PipelineResult:
     conversation_id: str
@@ -136,7 +149,7 @@ class InboundPipeline:
 
         # 4. classify
         classification = e.classifier.classify(text, self._state_summary(state_before))
-        injection = "possible_prompt_injection=True" in (classification.entities.get("_flags", ""))
+        injection = _injection_flagged(classification)
         trace.add(
             "CLASSIFIED",
             ", ".join(f"{i.type.value} {i.confidence:.2f}" for i in classification.intents) or "none",

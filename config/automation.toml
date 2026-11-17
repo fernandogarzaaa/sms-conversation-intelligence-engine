@@ -1,0 +1,23 @@
+# Automation thresholds for the SMS Conversation Intelligence Engine.
+# This file is the operator-editable source of truth; the values below match
+# AutomationConfig.default(). The engine starts with automation DISABLED for
+# every intent except PURE_POSITIVE and QUESTION, and an intent is only
+# enabled by a deliberate operator edit here, never by the learning loop
+# on its own. See src/sms_engine/application/config.py and
+# src/sms_engine/eval/thresholds.py.
+#
+# Load it with: AutomationConfig.from_toml("config/automation.toml")
+
+global_confidence_floor = 0.6
+
+[intents.PURE_POSITIVE]
+enabled = true
+min_confidence = 0.9
+graduation_min_approval = 0.95
+graduation_min_sample = 50
+
+[intents.QUESTION]
+enabled = true
+min_confidence = 0.8
+graduation_min_approval = 0.95
+graduation_min_sample = 50

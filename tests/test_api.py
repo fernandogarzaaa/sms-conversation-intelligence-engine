@@ -23,6 +23,21 @@ def test_health(client):
     assert client.get("/health").json()["ok"] is True
 
 
+def test_blank_and_empty_inbound_text_are_rejected(client):
+    for text in ("", "   "):
+        r = client.post("/messages/inbound", json={
+            "client_id": "greenline", "contact_id": "api-blank", "text": text,
+        })
+        assert r.status_code == 422, (text, r.status_code, r.text)
+
+
+def test_oversized_inbound_text_is_rejected(client):
+    r = client.post("/messages/inbound", json={
+        "client_id": "greenline", "contact_id": "api-big", "text": "x" * 5001,
+    })
+    assert r.status_code == 422
+
+
 def test_inbound_returns_full_decision(client):
     r = client.post("/messages/inbound", json={
         "client_id": "greenline", "contact_id": "api1",

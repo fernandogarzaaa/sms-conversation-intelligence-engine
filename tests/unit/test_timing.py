@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sms_engine.application.timing import TimingEngine
 from sms_engine.infrastructure.rng import Rng
@@ -59,3 +59,27 @@ def test_no_two_identical_timestamps():
         key = d.send_after.isoformat(timespec="seconds")
         assert key not in seen
         seen.add(key)
+
+
+def test_never_lands_on_forbidden_minute_across_many_seeds():
+    # Regression: the old dodge ran once, and seed 0 / salt m19 landed on
+    # 15:02:00 exactly. Sweep 200 seeds x 50 schedules: none may land on
+    # :00, :30, or a whole minute.
+    now = datetime(2026, 8, 20, 15, 0, tzinfo=timezone.utc)
+    for seed in range(200):
+        eng = TimingEngine(Rng(seed), tz_offset_hours=-5)
+        for i in range(50):
+            d = eng.schedule(now, char_len=10 + i, intent_count=1, is_question=False, salt=f"m{i}")
+            assert d.send_after.minute not in (0, 30), (seed, i, d.send_after)
+            assert d.send_after.second != 0, (seed, i, d.send_after)
+
+
+def test_message_at_0705_local_is_held_to_morning_window():
+    # Regression: the night-hold check compared only the hour, so 07:05
+    # local (before the 07:15 window opens) was sent immediately.
+    eng = _eng()
+    now = datetime(2026, 8, 20, 12, 5, tzinfo=timezone.utc)  # 07:05 local (-5)
+    d = eng.schedule(now, char_len=20, intent_count=1, is_question=False, salt="early")
+    local = d.send_after + timedelta(hours=-5)
+    assert local.hour >= 7 and (local.hour, local.minute) >= (7, 15)
+    assert "morning" in d.reason

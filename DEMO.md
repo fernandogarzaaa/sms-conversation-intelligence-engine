@@ -6,15 +6,15 @@ Two ways to demo: **console** (fast, shows decision traces) and **web dashboard*
 ## Setup
 
 ```bash
-python -m venv .venv
-.venv/Scripts/python.exe -m pip install -e ".[dev]"     # Windows path shown
-python -m pytest -q                                     # 93 tests, ~1s
+python3 -m venv .venv
+.venv/bin/python -m pip install -e ".[dev]"   # Windows: .venv\Scripts\python.exe
+.venv/bin/python -m pytest -q                 # 103 tests, ~1s
 ```
 
 ## A. Console demo (2 minutes)
 
 ```bash
-python scripts/demo.py
+.venv/bin/python scripts/demo.py
 ```
 
 Runs scenarios A–G. For each step it prints the customer message, detected
@@ -24,7 +24,7 @@ check with PASS/FAIL. Ends with `35/35 scenario checks passed` and a metrics dum
 Run a subset:
 
 ```bash
-python scripts/demo.py maya john
+.venv/bin/python scripts/demo.py maya john
 ```
 
 ### What to point at
@@ -75,8 +75,8 @@ then re-classifies, re-builds state (now has an open issue), and re-decides.
 ## B. Web dashboard (5 minutes)
 
 ```bash
-python scripts/demo.py --seed-db
-python -m uvicorn sms_engine.api.app:get_app --factory --port 8099
+.venv/bin/python scripts/demo.py --seed-db
+.venv/bin/python -m uvicorn sms_engine.api.app:get_app --factory --port 8099
 # open http://127.0.0.1:8099
 ```
 
@@ -116,7 +116,7 @@ passes a `send_after` to turn planned replies into sent outbound messages.
 
 ```bash
 curl -s localhost:8099/messages/inbound -H 'content-type: application/json' \
-  -d '{"client_id":"greenline","contact_id":"c1","text":"The crew was fantastic but there was a wasp nest so they could not clear the grill area."}' | python -m json.tool
+  -d '{"client_id":"greenline","contact_id":"c1","text":"The crew was fantastic but there was a wasp nest so they could not clear the grill area."}' | .venv/bin/python -m json.tool
 ```
 
 Returns the full decision: intents, entities, policy outcome, retrieved context,

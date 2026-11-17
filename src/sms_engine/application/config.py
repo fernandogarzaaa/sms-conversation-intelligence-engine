@@ -4,6 +4,9 @@ automation eligibility per intent is data, and starts DISABLED.
 
 from __future__ import annotations
 
+import tomllib
+from pathlib import Path
+
 from pydantic import BaseModel, Field
 
 
@@ -38,3 +41,15 @@ class AutomationConfig(BaseModel):
     def conservative(cls) -> "AutomationConfig":
         """Everything routes to a human. Used to demonstrate false-negative bias."""
         return cls(intents={})
+
+    @classmethod
+    def from_toml(cls, path: str | Path) -> "AutomationConfig":
+        """Load the operator-editable thresholds file (config/automation.toml).
+
+        Unknown intent sections are kept as rules; unknown keys are rejected
+        by pydantic, so a typo in the file fails loudly instead of silently
+        running on defaults.
+        """
+        with open(path, "rb") as f:
+            data = tomllib.load(f)
+        return cls.model_validate(data)

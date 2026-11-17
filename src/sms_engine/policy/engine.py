@@ -93,6 +93,16 @@ class PolicyEngine:
 
         suppression_release = any(h.release_suppression for h in hits)
 
+        # Opt-out beats escalation for routing too, not just for the
+        # suppression reason. Before this fix a message like "stop texting me,
+        # this was terrible" routed ESCALATE (precedence 3 > SUPPRESS 2), so
+        # the pipeline drafted a reply and opened a human review for a contact
+        # who had just opted out. An opt-out stops all outbound, full stop:
+        # no draft, no review, no send. A complaint without an opt-out still
+        # escalates as before.
+        if suppression_activate == SuppressionReason.OPT_OUT or pin.state_before.opted_out:
+            routing = RoutingDecision.SUPPRESS
+
         primary = self._primary_intent(pin, hits)
         allowed = self._allowed_actions(routing, forbidden, pin, primary)
         requires_grounding = (

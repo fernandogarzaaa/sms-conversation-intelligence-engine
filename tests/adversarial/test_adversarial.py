@@ -42,6 +42,17 @@ def test_opt_out_hidden_in_the_middle_still_suppresses(pipe):
     assert r.routing == RoutingDecision.SUPPRESS
 
 
+def test_optout_plus_complaint_suppresses_with_no_draft_and_no_review(pipe):
+    # End to end for the policy fix: opt-out + negative in one message must
+    # not draft a reply or open a human review for someone who opted out.
+    r = _send(pipe, "adv5b", "Stop texting me, this was terrible.")
+    assert r.routing == RoutingDecision.SUPPRESS
+    assert r.state_after.opted_out
+    assert r.planned_response is None
+    assert r.review_id is None
+    assert r.draft_text is None
+
+
 def test_rapid_consecutive_messages_invalidate_prior_queue(pipe, engine):
     _send(pipe, "adv6", "Everything went great, thanks!")
     _send(pipe, "adv6", "and again thanks")

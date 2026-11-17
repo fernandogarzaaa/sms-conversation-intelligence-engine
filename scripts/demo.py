@@ -87,7 +87,7 @@ def seed_db(path: str = "sms_engine.db") -> None:
         except Exception:
             pass
     engine.close()
-    print(f"seeded {path} — run:  uvicorn sms_engine.api.app:get_app --factory --reload")
+    print(f"seeded {path} — run:  uvicorn sms_engine.api.app:get_app --factory --port 8099")
 
 
 if __name__ == "__main__":

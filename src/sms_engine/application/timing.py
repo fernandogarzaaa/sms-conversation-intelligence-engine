@@ -74,8 +74,8 @@ class TimingEngine:
 
         local = self._local(target)
         reason = f"{bucket} message, base {base}s"
-        if local.hour >= NIGHT_START or local.hour < MORNING_OPEN.hour:
-            # roll forward to the next morning window
+        if local.hour >= NIGHT_START or local.time() < MORNING_OPEN:
+            # roll forward to the next morning window (07:15 local or later)
             day = local.date()
             if local.hour >= NIGHT_START:
                 day = day + timedelta(days=1)
@@ -89,16 +89,24 @@ class TimingEngine:
         target = self._dedupe(target)
         return TimingDecision(send_after=target, base_delay_seconds=base, reason=reason)
 
+    @staticmethod
+    def _is_forbidden(dt: datetime) -> bool:
+        # Never land on :00 or :30, and never on a whole minute: a wall of
+        # identical-looking timestamps reads as automated.
+        return dt.minute in (0, 30) or dt.second == 0
+
     def _dodge_forbidden_minutes(self, dt: datetime, r: Rng) -> datetime:
-        # never land exactly on :00 or :30, and never on a whole minute (avoids
-        # a wall of identical-looking timestamps)
-        if dt.minute in (0, 30) or dt.second == 0:
+        # Loop, don't dodge once: a single +63..227s jump can land on :00/:30
+        # or a whole minute again (seed 0, salt m19 landed on 15:02:00).
+        while self._is_forbidden(dt):
             dt = dt + timedelta(seconds=r.randint(63, 227))
         return dt
 
     def _dedupe(self, dt: datetime) -> datetime:
+        # A +7s dedupe step can also land on a forbidden minute, so the
+        # forbidden check belongs inside this loop too.
         key = dt.isoformat(timespec="seconds")
-        while key in self._issued:
+        while key in self._issued or self._is_forbidden(dt):
             dt = dt + timedelta(seconds=7)
             key = dt.isoformat(timespec="seconds")
         self._issued.add(key)

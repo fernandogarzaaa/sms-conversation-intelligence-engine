@@ -19,28 +19,31 @@ You need Python 3.11 or a later version. You need no API key and no network.
 
 1. Install the project:
 
-   ```powershell
-   py -m venv .venv
-   .venv\Scripts\python.exe -m pip install -e ".[dev]"
+   ```bash
+   python3 -m venv .venv
+   .venv/bin/python -m pip install -e ".[dev]"
    ```
+
+   On Windows PowerShell, use `py -m venv .venv` and
+   `.venv\Scripts\python.exe` in place of `.venv/bin/python`.
 
 2. Run the tests:
 
-   ```powershell
-   .venv\Scripts\python.exe -m pytest
+   ```bash
+   .venv/bin/python -m pytest
    ```
 
 3. Run the two failure cases:
 
-   ```powershell
-   .venv\Scripts\python.exe scripts\demo.py maya john
+   ```bash
+   .venv/bin/python scripts/demo.py maya john
    ```
 
 4. Start the web dashboard:
 
-   ```powershell
-   .venv\Scripts\python.exe scripts\demo.py --seed-db
-   .venv\Scripts\python.exe -m uvicorn sms_engine.api.app:get_app --factory --port 8099
+   ```bash
+   .venv/bin/python scripts/demo.py --seed-db
+   .venv/bin/python -m uvicorn sms_engine.api.app:get_app --factory --port 8099
    ```
 
 5. Open `http://127.0.0.1:8099` in a browser.
@@ -51,7 +54,7 @@ Section 12 explains the dashboard. Section 9 to section 13 give the full detail.
 
 ## 1. Purpose
 
-This repository is a working prototype. It shows a new conversation layer for the
+This repository is a working prototype. It shows a new conversation layer for
 the SMS system.
 
 The SMS system sends referral messages and review requests after a
@@ -253,6 +256,8 @@ src/sms_engine/
 data/
   clients/         one sample client context pack
   seed/            125 synthetic labelled inbound messages, for evaluation only
+config/
+  automation.toml  operator-editable automation thresholds (see §7)
 scripts/           demo.py, generate_seed_dataset.py
 tests/             unit, integration, end-to-end, adversarial, API
 ```
@@ -261,47 +266,50 @@ tests/             unit, integration, end-to-end, adversarial, API
 
 You need Python 3.11 or a later version.
 
-```powershell
-py -m venv .venv
-.venv\Scripts\python.exe -m pip install -e ".[dev]"
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -e ".[dev]"
 ```
+
+On Windows PowerShell, use `py -m venv .venv` and
+`.venv\Scripts\python.exe` in place of `.venv/bin/python`.
 
 The prototype needs no API key. The prototype needs no network.
 
 ## 10. How to run the tests
 
-```powershell
-.venv\Scripts\python.exe -m pytest
+```bash
+.venv/bin/python -m pytest
 ```
 
-The result is `93 passed`. The tests are deterministic and offline.
+The result is `103 passed`. The tests are deterministic and offline.
 
 ## 11. How to run the demonstration
 
 To run all scenarios with the decision trace for each step:
 
-```powershell
-.venv\Scripts\python.exe scripts\demo.py
+```bash
+.venv/bin/python scripts/demo.py
 ```
 
 To run only the two failure cases:
 
-```powershell
-.venv\Scripts\python.exe scripts\demo.py maya john
+```bash
+.venv/bin/python scripts/demo.py maya john
 ```
 
 ## 12. How to start the web dashboard
 
 1. Create the demo database:
 
-   ```powershell
-   .venv\Scripts\python.exe scripts\demo.py --seed-db
+   ```bash
+   .venv/bin/python scripts/demo.py --seed-db
    ```
 
 2. Start the server:
 
-   ```powershell
-   .venv\Scripts\python.exe -m uvicorn sms_engine.api.app:get_app --factory --port 8099
+   ```bash
+   .venv/bin/python -m uvicorn sms_engine.api.app:get_app --factory --port 8099
    ```
 
 3. Open `http://127.0.0.1:8099` in a browser.

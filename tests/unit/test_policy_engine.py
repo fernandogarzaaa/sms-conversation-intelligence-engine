@@ -11,7 +11,7 @@ from sms_engine.context.packs import default_context
 from sms_engine.domain.classification import Classification, IntentPrediction
 from sms_engine.domain.entities import Entities
 from sms_engine.domain.enums import IntentType, RiskLevel, RoutingDecision, SuppressionReason
-from sms_engine.domain.state import ConversationState, OpenIssue, Offer
+from sms_engine.domain.state import ConversationState, OpenIssue, Offer, Suppression
 from sms_engine.policy import actions as A
 from sms_engine.policy.engine import PolicyEngine, PolicyInput
 
@@ -72,6 +72,24 @@ def test_stop_optout_is_global_suppression():
     out = _decide(_cls((IntentType.STOP_OPTOUT, 0.98)))
     assert out.routing == RoutingDecision.SUPPRESS
     assert out.suppression_activate == SuppressionReason.OPT_OUT
+    assert out.forbids(A.ANY_OUTBOUND)
+
+
+def test_optout_beats_negative_escalation():
+    # "stop texting me, this was terrible": opt-out + complaint in one
+    # message. Escalation used to win on precedence, so the pipeline drafted
+    # a reply and opened a review for a contact who had just opted out.
+    out = _decide(_cls((IntentType.STOP_OPTOUT, 0.98), (IntentType.NEGATIVE, 0.9)))
+    assert out.routing == RoutingDecision.SUPPRESS
+    assert out.suppression_activate == SuppressionReason.OPT_OUT
+    assert out.forbids(A.ANY_OUTBOUND)
+    assert out.allowed_actions == []
+
+
+def test_previously_opted_out_contact_never_escalates():
+    st = _state(suppression=Suppression(active=True, reason=SuppressionReason.OPT_OUT, since=NOW))
+    out = _decide(_cls((IntentType.NEGATIVE, 0.9)), state=st)
+    assert out.routing == RoutingDecision.SUPPRESS
     assert out.forbids(A.ANY_OUTBOUND)
 
 

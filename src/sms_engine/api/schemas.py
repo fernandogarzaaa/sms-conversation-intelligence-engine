@@ -2,16 +2,26 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class InboundMessageIn(BaseModel):
-    client_id: str
-    contact_id: str
-    text: str
+    client_id: str = Field(min_length=1, max_length=128)
+    contact_id: str = Field(min_length=1, max_length=128)
+    # SMS is short by nature; the cap is a guard against unbounded input
+    # reaching the classifier, not a product limit. Blank text is rejected:
+    # it previously reached the pipeline and was classified on empty input.
+    text: str = Field(min_length=1, max_length=5000)
     conversation_id: str | None = None
     phone: str | None = None
     neighborhood: str | None = None
+
+    @field_validator("text")
+    @classmethod
+    def text_must_not_be_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("text must not be blank")
+        return v
 
 
 class EventIn(BaseModel):

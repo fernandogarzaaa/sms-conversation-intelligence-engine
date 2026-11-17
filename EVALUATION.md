@@ -43,6 +43,13 @@ may also emit lower-signal intents (e.g. `REPEAT_BUSINESS_INTENT` alongside
 `test_eval.py` enforces a floor: salient recall ≥ 0.90, macro-F1 ≥ 0.85, and
 precision ≥ 0.75 on `STOP_OPTOUT / NEGATIVE / MIXED_SENTIMENT / OPEN_ISSUE`.
 
+Read the scores with the authorship in mind: the same author wrote the
+labelled rows and the `MockProvider` rules, so the scores measure the rules
+against their own author's intent, not against independent human judgement.
+They are a regression guard for this prototype, not a claim about a real
+model. A real model gets a new score from the same tool, on labels it did
+not write.
+
 ### Known residual mismatches (not overfit away on purpose)
 
 | id | expected | predicted | why it's acceptable |
