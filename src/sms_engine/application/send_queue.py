@@ -84,7 +84,8 @@ class SendQueue:
             out.append(p)
         return out
 
-    def mark_sent(self, p: PlannedResponse, sent_message_id: str, now: datetime, *, offers=None, links=None) -> None:
+    def mark_sent(self, p: PlannedResponse, sent_message_id: str, now: datetime, *, offers=None, links=None,
+                  extra: dict | None = None) -> None:
         self.planned.set_status(p.id, "SENT")
         self.events.append(
             id=self.ids.new("evt"),
@@ -97,6 +98,8 @@ class SendQueue:
                 "message_id": sent_message_id,
                 "offers_presented": offers or [],
                 "links_sent": links or [],
+                "kind": p.kind,
+                **(extra or {}),
             },
             caused_by=p.in_reply_to,
         )

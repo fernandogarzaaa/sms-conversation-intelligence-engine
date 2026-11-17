@@ -5,10 +5,11 @@ from __future__ import annotations
 import json
 import sqlite3
 from datetime import datetime
+from typing import Any
 
 from sms_engine.domain.context import ClientContext
-from sms_engine.domain.events import Event
 from sms_engine.domain.enums import EventType
+from sms_engine.domain.events import Event
 from sms_engine.domain.messages import Direction, Message
 from sms_engine.domain.planning import PlannedResponse
 from sms_engine.domain.trace import DecisionTrace
@@ -18,8 +19,13 @@ def _dt(s: str) -> datetime:
     return datetime.fromisoformat(s)
 
 
+# Repositories accept either a raw sqlite3.Connection or the thread-safe
+# `SafeConnection` facade from `infrastructure.db`; both expose execute/commit.
+Conn = Any
+
+
 class ClientRepo:
-    def __init__(self, conn: sqlite3.Connection) -> None:
+    def __init__(self, conn: Conn) -> None:
         self.conn = conn
 
     def upsert(self, ctx: ClientContext) -> None:
@@ -42,40 +48,85 @@ class ClientRepo:
 
 
 class ConversationRepo:
-    def __init__(self, conn: sqlite3.Connection) -> None:
+    def __init__(self, conn: Conn) -> None:
         self.conn = conn
 
     def create(
-        self, id: str, contact_id: str, client_id: str, created_at: datetime, phone: str | None = None
+        self,
+        id: str,
+        contact_id: str,
+        client_id: str,
+        created_at: datetime,
+        phone: str | None = None,
+        neighborhood: str | None = None,
     ) -> None:
         self.conn.execute(
-            "INSERT INTO conversations(id, contact_id, client_id, phone, created_at) "
-            "VALUES(?,?,?,?,?)",
-            (id, contact_id, client_id, phone, created_at.isoformat()),
+            "INSERT INTO conversations(id, contact_id, client_id, phone, created_at, neighborhood) "
+            "VALUES(?,?,?,?,?,?)",
+            (id, contact_id, client_id, phone, created_at.isoformat(), neighborhood),
         )
         self.conn.commit()
 
     def get(self, id: str) -> sqlite3.Row | None:
         return self.conn.execute("SELECT * FROM conversations WHERE id=?", (id,)).fetchone()
 
-    def find_by_contact(self, contact_id: str) -> sqlite3.Row | None:
+    def find_by_contact(self, contact_id: str, client_id: str | None = None) -> sqlite3.Row | None:
+        if client_id is None:
+            return self.conn.execute(
+                "SELECT * FROM conversations WHERE contact_id=? ORDER BY created_at LIMIT 1",
+                (contact_id,),
+            ).fetchone()
         return self.conn.execute(
-            "SELECT * FROM conversations WHERE contact_id=? ORDER BY created_at LIMIT 1",
-            (contact_id,),
+            "SELECT * FROM conversations WHERE contact_id=? AND client_id=? ORDER BY created_at LIMIT 1",
+            (contact_id, client_id),
         ).fetchone()
 
-    def all_ids(self) -> list[str]:
-        return [r["id"] for r in self.conn.execute("SELECT id FROM conversations ORDER BY created_at")]
+    def find_by_phone(self, phone: str, client_id: str) -> sqlite3.Row | None:
+        return self.conn.execute(
+            "SELECT * FROM conversations WHERE phone=? AND client_id=? ORDER BY created_at LIMIT 1",
+            (phone, client_id),
+        ).fetchone()
+
+    def update_contact_details(
+        self, id: str, *, phone: str | None = None, neighborhood: str | None = None
+    ) -> None:
+        if phone:
+            self.conn.execute(
+                "UPDATE conversations SET phone=? WHERE id=? AND (phone IS NULL OR phone='')",
+                (phone, id),
+            )
+        if neighborhood:
+            self.conn.execute("UPDATE conversations SET neighborhood=? WHERE id=?", (neighborhood, id))
+        self.conn.commit()
+
+    def all_ids(self, *, client_id: str | None = None, limit: int | None = None, offset: int = 0) -> list[str]:
+        sql = "SELECT id FROM conversations"
+        params: list = []
+        if client_id:
+            sql += " WHERE client_id=?"
+            params.append(client_id)
+        sql += " ORDER BY created_at, id"
+        if limit is not None:
+            sql += " LIMIT ? OFFSET ?"
+            params += [int(limit), int(offset)]
+        return [r["id"] for r in self.conn.execute(sql, params)]
+
+    def count(self, *, client_id: str | None = None) -> int:
+        if client_id:
+            r = self.conn.execute("SELECT COUNT(*) n FROM conversations WHERE client_id=?", (client_id,))
+        else:
+            r = self.conn.execute("SELECT COUNT(*) n FROM conversations")
+        return int(r.fetchone()["n"])
 
 
 class MessageRepo:
-    def __init__(self, conn: sqlite3.Connection) -> None:
+    def __init__(self, conn: Conn) -> None:
         self.conn = conn
 
     def add(self, m: Message) -> None:
         self.conn.execute(
             "INSERT INTO messages(id, conversation_id, direction, raw_text, created_at, "
-            "variant_id, human_edited, meta_json) VALUES(?,?,?,?,?,?,?,?)",
+            "variant_id, human_edited, meta_json, provider_message_id) VALUES(?,?,?,?,?,?,?,?,?)",
             (
                 m.id,
                 m.conversation_id,
@@ -85,6 +136,7 @@ class MessageRepo:
                 m.variant_id,
                 int(m.human_edited),
                 json.dumps(m.meta),
+                m.provider_message_id,
             ),
         )
         self.conn.commit()
@@ -98,6 +150,7 @@ class MessageRepo:
             created_at=_dt(r["created_at"]),
             variant_id=r["variant_id"],
             human_edited=bool(r["human_edited"]),
+            provider_message_id=r["provider_message_id"],
             meta=json.loads(r["meta_json"]),
         )
 
@@ -112,9 +165,28 @@ class MessageRepo:
         r = self.conn.execute("SELECT * FROM messages WHERE id=?", (message_id,)).fetchone()
         return self._row_to_msg(r) if r else None
 
+    def get_by_provider_id(self, provider_message_id: str) -> Message | None:
+        r = self.conn.execute(
+            "SELECT * FROM messages WHERE provider_message_id=?", (provider_message_id,)
+        ).fetchone()
+        return self._row_to_msg(r) if r else None
+
+    def update_meta(self, message_id: str, meta: dict) -> None:
+        self.conn.execute(
+            "UPDATE messages SET meta_json=? WHERE id=?", (json.dumps(meta), message_id)
+        )
+        self.conn.commit()
+
+    def count(self, direction: str | None = None) -> int:
+        if direction:
+            r = self.conn.execute("SELECT COUNT(*) n FROM messages WHERE direction=?", (direction,))
+        else:
+            r = self.conn.execute("SELECT COUNT(*) n FROM messages")
+        return int(r.fetchone()["n"])
+
 
 class EventRepo:
-    def __init__(self, conn: sqlite3.Connection) -> None:
+    def __init__(self, conn: Conn) -> None:
         self.conn = conn
 
     def current_version(self, conversation_id: str) -> int:
@@ -219,18 +291,19 @@ class EventRepo:
 
 
 class PlannedResponseRepo:
-    def __init__(self, conn: sqlite3.Connection) -> None:
+    def __init__(self, conn: Conn) -> None:
         self.conn = conn
 
     def save(self, p: PlannedResponse) -> None:
         self.conn.execute(
             "INSERT INTO planned_responses(id, conversation_id, contact_id, in_reply_to, "
             "built_at_version, text, variant_id, validation_json, send_after, created_at, "
-            "status, model_used, generation_latency_ms, actions_json) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+            "status, model_used, generation_latency_ms, actions_json, kind, send_attempts, last_error) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
             "ON CONFLICT(id) DO UPDATE SET status=excluded.status, text=excluded.text, "
             "validation_json=excluded.validation_json, send_after=excluded.send_after, "
-            "variant_id=excluded.variant_id, actions_json=excluded.actions_json",
+            "variant_id=excluded.variant_id, actions_json=excluded.actions_json, "
+            "send_attempts=excluded.send_attempts, last_error=excluded.last_error",
             (
                 p.id,
                 p.conversation_id,
@@ -246,6 +319,9 @@ class PlannedResponseRepo:
                 p.model_used,
                 p.generation_latency_ms,
                 json.dumps(p.actions),
+                p.kind,
+                p.send_attempts,
+                p.last_error,
             ),
         )
         self.conn.commit()
@@ -268,11 +344,34 @@ class PlannedResponseRepo:
             model_used=r["model_used"],
             generation_latency_ms=r["generation_latency_ms"],
             actions=json.loads(r["actions_json"]),
+            kind=r["kind"] or "REPLY",
+            send_attempts=int(r["send_attempts"] or 0),
+            last_error=r["last_error"],
         )
 
     def get(self, id: str) -> PlannedResponse | None:
         r = self.conn.execute("SELECT * FROM planned_responses WHERE id=?", (id,)).fetchone()
         return self._row(r) if r else None
+
+    def for_conversation(self, conversation_id: str) -> list[PlannedResponse]:
+        rows = self.conn.execute(
+            "SELECT * FROM planned_responses WHERE conversation_id=? ORDER BY created_at, id",
+            (conversation_id,),
+        ).fetchall()
+        return [self._row(r) for r in rows]
+
+    def for_reply_to(self, message_id: str) -> list[PlannedResponse]:
+        rows = self.conn.execute(
+            "SELECT * FROM planned_responses WHERE in_reply_to=? ORDER BY created_at, id", (message_id,)
+        ).fetchall()
+        return [self._row(r) for r in rows]
+
+    def stuck_sending(self, older_than: datetime) -> list[PlannedResponse]:
+        rows = self.conn.execute(
+            "SELECT * FROM planned_responses WHERE status='SENDING' AND send_after <= ?",
+            (older_than.isoformat(),),
+        ).fetchall()
+        return [self._row(r) for r in rows]
 
     def open_for_conversation(self, conversation_id: str) -> list[PlannedResponse]:
         rows = self.conn.execute(
@@ -294,9 +393,59 @@ class PlannedResponseRepo:
         self.conn.execute("UPDATE planned_responses SET status=? WHERE id=?", (status, id))
         self.conn.commit()
 
+    def record_send_failure(
+        self, id: str, *, error: str, retry_at: datetime | None, give_up: bool
+    ) -> None:
+        self.conn.execute(
+            "UPDATE planned_responses SET send_attempts=send_attempts+1, last_error=?, "
+            "status=?, send_after=COALESCE(?, send_after) WHERE id=?",
+            (error[:500], "FAILED" if give_up else "PLANNED",
+             retry_at.isoformat() if retry_at else None, id),
+        )
+        self.conn.commit()
+
+    def send_after_taken(self, when: datetime) -> bool:
+        """True if any still-planned response is already scheduled at this exact second."""
+        key = when.isoformat(timespec="seconds")
+        r = self.conn.execute(
+            "SELECT 1 FROM planned_responses WHERE status='PLANNED' AND substr(send_after,1,19)=? LIMIT 1",
+            (key[:19],),
+        ).fetchone()
+        return r is not None
+
+    def variant_history(self, contact_id: str, limit: int = 10) -> list[str]:
+        """Variant ids used for this contact, oldest first (planned or sent, not discarded)."""
+        rows = self.conn.execute(
+            "SELECT variant_id FROM planned_responses WHERE contact_id=? AND variant_id IS NOT NULL "
+            "AND status IN ('PLANNED','SENT') ORDER BY created_at DESC, id DESC LIMIT ?",
+            (contact_id, limit),
+        ).fetchall()
+        return [r["variant_id"] for r in reversed(rows)]
+
+    def neighborhood_variants(self, neighborhood: str, kind: str) -> list[str]:
+        rows = self.conn.execute(
+            "SELECT p.variant_id AS v FROM planned_responses p "
+            "JOIN conversations c ON c.id = p.conversation_id "
+            "WHERE c.neighborhood=? AND p.variant_id LIKE ? AND p.status IN ('PLANNED','SENT')",
+            (neighborhood, f"{kind}:%"),
+        ).fetchall()
+        return [r["v"] for r in rows]
+
+    def count_by_status(self) -> dict[str, int]:
+        rows = self.conn.execute(
+            "SELECT status, COUNT(*) n FROM planned_responses GROUP BY status"
+        ).fetchall()
+        return {r["status"]: int(r["n"]) for r in rows}
+
+    def list_recent(self, limit: int = 50) -> list[PlannedResponse]:
+        rows = self.conn.execute(
+            "SELECT * FROM planned_responses ORDER BY created_at DESC, id DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [self._row(r) for r in rows]
+
 
 class ReviewRepo:
-    def __init__(self, conn: sqlite3.Connection) -> None:
+    def __init__(self, conn: Conn) -> None:
         self.conn = conn
 
     def create(self, row: dict) -> None:
@@ -310,12 +459,49 @@ class ReviewRepo:
     def get(self, id: str) -> sqlite3.Row | None:
         return self.conn.execute("SELECT * FROM reviews WHERE id=?", (id,)).fetchone()
 
-    def open_queue(self) -> list[sqlite3.Row]:
+    def for_message(self, message_id: str) -> list[sqlite3.Row]:
         return self.conn.execute(
-            "SELECT * FROM reviews WHERE status='OPEN' ORDER BY "
-            "CASE risk_level WHEN 'CRITICAL' THEN 0 WHEN 'HIGH' THEN 1 "
-            "WHEN 'MEDIUM' THEN 2 ELSE 3 END, created_at",
+            "SELECT * FROM reviews WHERE message_id=? ORDER BY created_at, id", (message_id,)
         ).fetchall()
+
+    def open_queue(self, *, client_id: str | None = None) -> list[sqlite3.Row]:
+        order = (
+            " ORDER BY CASE r.risk_level WHEN 'CRITICAL' THEN 0 WHEN 'HIGH' THEN 1 "
+            "WHEN 'MEDIUM' THEN 2 ELSE 3 END, r.created_at, r.id"
+        )
+        if client_id:
+            return self.conn.execute(
+                "SELECT r.* FROM reviews r JOIN conversations c ON c.id = r.conversation_id "
+                "WHERE r.status='OPEN' AND c.client_id=?" + order,
+                (client_id,),
+            ).fetchall()
+        return self.conn.execute("SELECT r.* FROM reviews r WHERE r.status='OPEN'" + order).fetchall()
+
+    def open_for_conversation(self, conversation_id: str) -> list[sqlite3.Row]:
+        return self.conn.execute(
+            "SELECT * FROM reviews WHERE conversation_id=? AND status='OPEN' ORDER BY created_at, id",
+            (conversation_id,),
+        ).fetchall()
+
+    def for_conversation(self, conversation_id: str) -> list[sqlite3.Row]:
+        return self.conn.execute(
+            "SELECT * FROM reviews WHERE conversation_id=? ORDER BY created_at, id",
+            (conversation_id,),
+        ).fetchall()
+
+    def open_counts_by_conversation(self) -> dict[str, int]:
+        rows = self.conn.execute(
+            "SELECT conversation_id, COUNT(*) n FROM reviews WHERE status='OPEN' GROUP BY conversation_id"
+        ).fetchall()
+        return {r["conversation_id"]: int(r["n"]) for r in rows}
+
+    def supersede(self, id: str, *, at: datetime, by_message_id: str) -> None:
+        """Close an open review because a newer inbound message made its draft stale."""
+        self.conn.execute(
+            "UPDATE reviews SET status='SUPERSEDED', decided_at=?, notes=? WHERE id=? AND status='OPEN'",
+            (at.isoformat(), f"superseded by newer inbound message {by_message_id}", id),
+        )
+        self.conn.commit()
 
     def decided(self) -> list[sqlite3.Row]:
         return self.conn.execute(
@@ -345,7 +531,7 @@ class ReviewRepo:
 
 
 class TraceRepo:
-    def __init__(self, conn: sqlite3.Connection) -> None:
+    def __init__(self, conn: Conn) -> None:
         self.conn = conn
 
     def save(self, t: DecisionTrace) -> None:
@@ -377,7 +563,7 @@ class TraceRepo:
 
 
 class FollowupRepo:
-    def __init__(self, conn: sqlite3.Connection) -> None:
+    def __init__(self, conn: Conn) -> None:
         self.conn = conn
 
     def add(
@@ -414,3 +600,21 @@ class FollowupRepo:
 
     def all(self) -> list[sqlite3.Row]:
         return self.conn.execute("SELECT * FROM followups ORDER BY due_at").fetchall()
+
+    def get(self, id: str) -> sqlite3.Row | None:
+        return self.conn.execute("SELECT * FROM followups WHERE id=?", (id,)).fetchone()
+
+    def due(self, now: datetime) -> list[sqlite3.Row]:
+        return self.conn.execute(
+            "SELECT * FROM followups WHERE status='SCHEDULED' AND due_at <= ? ORDER BY due_at, id",
+            (now.isoformat(),),
+        ).fetchall()
+
+    def set_status(
+        self, id: str, status: str, *, at: datetime, review_id: str | None = None
+    ) -> None:
+        self.conn.execute(
+            "UPDATE followups SET status=?, updated_at=?, review_id=COALESCE(?, review_id) WHERE id=?",
+            (status, at.isoformat(), review_id, id),
+        )
+        self.conn.commit()

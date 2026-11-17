@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from sms_engine.domain.enums import EventType
 
 
@@ -14,8 +12,8 @@ def test_second_inbound_invalidates_first_queued_response(engine, pipe):
     v1 = r1.planned_response.built_at_version
 
     # customer sends a second message before the first reply is due
-    r2 = pipe.handle_inbound(client_id="greenline", contact_id="cc",
-                             text="Actually wait, the crew left a box in the driveway.")
+    pipe.handle_inbound(client_id="greenline", contact_id="cc",
+                        text="Actually wait, the crew left a box in the driveway.")
     plan = engine.planned.get(plan_id)
     assert plan.status == "INVALIDATED"
     assert engine.events.current_version(r1.conversation_id) > v1

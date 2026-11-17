@@ -6,15 +6,25 @@ generator. None of these make decisions — they propose structured data and dra
 language, which the deterministic layers then bound and validate.
 """
 
-from sms_engine.ai.provider import (
-    LLMProvider,
-    ProviderResponse,
-    GenerateSpec,
-)
-from sms_engine.ai.mock_provider import MockProvider
 from sms_engine.ai.classifier import MultiIntentClassifier
 from sms_engine.ai.extractor import EntityExtractor
+from sms_engine.ai.factory import provider_from_env
 from sms_engine.ai.generator import ResponseGenerator
+from sms_engine.ai.llm import (
+    AnthropicProvider,
+    HTTPLLMProvider,
+    LLMError,
+    LocalProvider,
+    OpenAICompatibleProvider,
+    OpenAIProvider,
+    OpenRouterProvider,
+)
+from sms_engine.ai.mock_provider import MockProvider
+from sms_engine.ai.provider import (
+    GenerateSpec,
+    LLMProvider,
+    ProviderResponse,
+)
 
 __all__ = [
     "LLMProvider",
@@ -24,4 +34,12 @@ __all__ = [
     "MultiIntentClassifier",
     "EntityExtractor",
     "ResponseGenerator",
+    "HTTPLLMProvider",
+    "OpenAICompatibleProvider",
+    "OpenAIProvider",
+    "OpenRouterProvider",
+    "LocalProvider",
+    "AnthropicProvider",
+    "LLMError",
+    "provider_from_env",
 ]

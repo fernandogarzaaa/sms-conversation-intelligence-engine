@@ -18,7 +18,7 @@ from sms_engine.domain.enums import (
     SuppressionReason,
 )
 from sms_engine.domain.events import Event
-from sms_engine.domain.messages import Direction, Message
+from sms_engine.domain.messages import Message
 from sms_engine.domain.state import (
     ConversationState,
     Fact,
@@ -66,7 +66,16 @@ def _apply(st: ConversationState, ev: Event, msg_by_id: dict[str, Message]) -> N
     t = ev.type
 
     if t == EventType.JOB_COMPLETED:
-        st.campaign_status = CampaignStatus.PENDING
+        # a completed job re-opens campaign eligibility, but never overrides an
+        # opt-out or an active suppression
+        if st.campaign_status not in (CampaignStatus.OPTED_OUT, CampaignStatus.SUPPRESSED):
+            st.campaign_status = CampaignStatus.PENDING
+        # the CRM / job system's name on file (unverified until the customer confirms)
+        name = p.get("customer_name")
+        if name and not st.identity.name:
+            st.identity = Identity(
+                name=str(name), verified=False, source_message_id=None, updated_at=ev.created_at
+            )
 
     elif t == EventType.CAMPAIGN_TRIGGERED:
         if st.campaign_status in (CampaignStatus.PENDING,):
@@ -95,6 +104,13 @@ def _apply(st: ConversationState, ev: Event, msg_by_id: dict[str, Message]) -> N
                     source_message_id=mid,
                 )
             )
+        rs = p.get("referral_status")
+        if rs and st.referral_status in (ReferralStatus.NONE,):
+            st.referral_status = ReferralStatus(rs)
+        if p.get("campaign_status") and st.campaign_status not in (
+            CampaignStatus.OPTED_OUT, CampaignStatus.SUPPRESSED
+        ):
+            st.campaign_status = CampaignStatus(p["campaign_status"])
         m = msg_by_id.get(mid)
         st.last_interaction = m.created_at if m else ev.created_at
 
@@ -115,6 +131,10 @@ def _apply(st: ConversationState, ev: Event, msg_by_id: dict[str, Message]) -> N
         _apply_state_delta(st, p, ev.created_at)
 
     elif t == EventType.SUPPRESSION_ACTIVATED:
+        # opt-out is permanent: a later, softer suppression (MANUAL, ESCALATED, ...)
+        # must never overwrite it, or the contact would silently become reachable
+        if st.opted_out and p.get("reason") != SuppressionReason.OPT_OUT.value:
+            return
         st.suppression = Suppression(
             active=True,
             reason=SuppressionReason(p["reason"]),
@@ -127,6 +147,8 @@ def _apply(st: ConversationState, ev: Event, msg_by_id: dict[str, Message]) -> N
             st.campaign_status = CampaignStatus.SUPPRESSED
 
     elif t == EventType.SUPPRESSION_RELEASED:
+        if st.opted_out:  # an opt-out can never be released
+            return
         st.suppression = Suppression(
             active=False,
             reason=None,
@@ -146,6 +168,13 @@ def _apply(st: ConversationState, ev: Event, msg_by_id: dict[str, Message]) -> N
                 note=p.get("note"),
             )
             st.campaign_status = CampaignStatus.SUPPRESSED
+
+    elif t == EventType.ISSUE_RESOLVED:
+        for oi in st.open_issues:
+            if oi.id == p.get("issue_id") and not oi.resolved:
+                oi.resolved = True
+                oi.resolved_at = _parse_dt(p.get("resolved_at")) or ev.created_at
+                oi.resolution_note = p.get("note")
 
     elif t == EventType.SCHEDULED_FOLLOWUP:
         fid = p.get("future_intent_id")
@@ -194,6 +223,7 @@ def _apply_state_delta(st: ConversationState, p: dict, when: datetime) -> None:
             if oi.id == rid and not oi.resolved:
                 oi.resolved = True
                 oi.resolved_at = when
+                oi.resolution_note = p.get("resolution_note")
 
     for fi in p.get("future_intents", []):
         st.future_intents.append(

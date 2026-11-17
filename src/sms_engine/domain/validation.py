@@ -27,5 +27,5 @@ class ValidationResult(BaseModel):
         return [f for f in self.findings if f.severity == "warn"]
 
     @classmethod
-    def ok(cls) -> "ValidationResult":
+    def ok(cls) -> ValidationResult:
         return cls(passed=True, findings=[])

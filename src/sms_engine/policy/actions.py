@@ -13,6 +13,7 @@ DISCOUNT_OFFER = "discount_offer"
 ACKNOWLEDGEMENT = "acknowledgement"    # a plain contextual reply, no ask
 ANSWER_QUESTION = "answer_question"
 CONFIRM_IDENTITY = "confirm_identity"
+FOLLOWUP_OUTREACH = "followup_outreach"  # a human-approved check-in on a volunteered need
 
 CAMPAIGN_ACTIONS = {
     REFERRAL_ASK,
@@ -25,3 +26,12 @@ CAMPAIGN_ACTIONS = {
 
 def repeat_offer(kind: str) -> str:
     return f"repeat_offer:{kind}"
+
+
+# Offer kinds recorded on the conversation when a campaign action is sent, so the
+# same thing is never presented twice (R_NO_REPEAT_OFFERS).
+OFFER_KIND_FOR_ACTION = {
+    REVIEW_REQUEST: "review_link",
+    REFERRAL_ASK: "referral_terms",
+    REFERRAL_LINK_SEND: "referral_link",
+}

@@ -6,8 +6,8 @@ expressed as plain predicates over the PipelineResult.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable
 
 from sms_engine.application.pipeline import PipelineResult
 from sms_engine.domain.enums import IntentType, RoutingDecision

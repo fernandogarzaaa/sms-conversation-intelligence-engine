@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from sms_engine.domain.enums import RoutingDecision
 
 

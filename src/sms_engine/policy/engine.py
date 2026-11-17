@@ -234,6 +234,25 @@ class PolicyEngine:
             )
         return None
 
+    def _r_repeated_issues(self, pin: PolicyInput) -> PolicyRuleHit | None:
+        c = pin.classification
+        prior = sum(1 for i in pin.state_before.open_issues if not i.resolved)
+        new = 1 if (c.has(IntentType.OPEN_ISSUE) or c.has(IntentType.MIXED_SENTIMENT)) else 0
+        limit = self.config.escalate_on_open_issues
+        if prior and prior + new >= limit:
+            return PolicyRuleHit(
+                rule_id="R_REPEATED_ISSUES",
+                description=(
+                    f"{prior + new} unresolved issues on this contact (limit {limit}): "
+                    "escalate to a human, hold all automated outbound."
+                ),
+                routing=RoutingDecision.ESCALATE,
+                risk=RiskLevel.CRITICAL,
+                activate_suppression=SuppressionReason.ESCALATED,
+                forbid_actions=[A.ANY_OUTBOUND, *sorted(A.CAMPAIGN_ACTIONS)],
+            )
+        return None
+
     def _r_identity_correction(self, pin: PolicyInput) -> PolicyRuleHit | None:
         if pin.classification.has(IntentType.IDENTITY_CORRECTION) or pin.entities.corrected_name:
             return PolicyRuleHit(
@@ -386,6 +405,7 @@ class PolicyEngine:
             self.__class__._r_wrong_number,
             self.__class__._r_mixed_or_open_issue,
             self.__class__._r_state_has_open_issue,
+            self.__class__._r_repeated_issues,
             self.__class__._r_identity_correction,
             self.__class__._r_deferral,
             self.__class__._r_question,
@@ -395,3 +415,134 @@ class PolicyEngine:
             self.__class__._r_referral_already_committed,
             self.__class__._r_no_repeat_offers,
         ]
+
+
+# ---------------------------------------------------------------------------
+# Guards for messages that do not come from the inbound pipeline: text a human
+# approved in the review queue, and campaign steps. Both are derived from the
+# conversation state alone, deterministically.
+# ---------------------------------------------------------------------------
+
+
+def state_forbidden_actions(state: ConversationState) -> list[str]:
+    """Actions the conversation state forbids for ANY outbound message."""
+    forbidden: list[str] = []
+
+    def add(*acts: str) -> None:
+        for a in acts:
+            if a not in forbidden:
+                forbidden.append(a)
+
+    if state.opted_out:
+        add(A.ANY_OUTBOUND, *sorted(A.CAMPAIGN_ACTIONS), A.FOLLOWUP_OUTREACH)
+    if state.suppression.active or state.has_unresolved_issue:
+        add(*sorted(A.CAMPAIGN_ACTIONS))
+    if state.referral_already_committed:
+        add(A.REFERRAL_ASK)
+    for kind in sorted(state.offer_kinds_presented()):
+        add(A.repeat_offer(kind))
+    return forbidden
+
+
+def outbound_guard(state: ConversationState, *, risk: RiskLevel = RiskLevel.MEDIUM) -> PolicyOutcome:
+    """The policy a human-approved or campaign message is validated against.
+
+    Approval never bypasses the guardrails: an open issue still forbids a referral
+    ask, an opt-out still forbids everything, a committed referral still forbids
+    asking again.
+    """
+    forbidden = state_forbidden_actions(state)
+    return PolicyOutcome(
+        routing=RoutingDecision.HUMAN_REVIEW,
+        risk=risk,
+        forbidden_actions=forbidden,
+        allowed_actions=[a for a in (A.ACKNOWLEDGEMENT,) if a not in forbidden],
+        summary="[R_OUTBOUND_GUARD] state-derived guard for a non-pipeline outbound message",
+        rule_hits=[
+            PolicyRuleHit(
+                rule_id="R_OUTBOUND_GUARD",
+                description="Forbidden actions derived from suppression, open issues, referral status, and offers already presented.",
+                forbid_actions=forbidden,
+            )
+        ],
+    )
+
+
+@dataclass
+class CampaignCheck:
+    allowed: bool
+    kind: str               # the campaign kind that will actually be sent
+    requested_kind: str
+    reason: str
+    actions: list[str]
+
+
+CAMPAIGN_KINDS = ("review_request", "referral_ask", "referral_link")
+
+
+def campaign_check(
+    kind: str,
+    state: ConversationState,
+    client: ClientContext,
+    config: AutomationConfig,
+    *,
+    has_open_review: bool = False,
+) -> CampaignCheck:
+    """Decide deterministically whether a campaign step may be sent now.
+
+    The order mirrors the brief: suppression is global, open issues block every
+    campaign action, nothing already presented is presented again, and a customer
+    who already committed to refer gets their personal link instead of the pitch.
+    """
+    requested = kind
+    if kind not in CAMPAIGN_KINDS:
+        return CampaignCheck(False, kind, requested, f"unknown campaign kind {kind!r}", [])
+
+    def blocked(reason: str) -> CampaignCheck:
+        return CampaignCheck(False, kind, requested, reason, [])
+
+    if not config.campaigns.enabled:
+        return blocked("campaigns are disabled in the automation config")
+    if state.opted_out:
+        return blocked("contact opted out")
+    if state.suppression.active:
+        reason = state.suppression.reason.value if state.suppression.reason else "ACTIVE"
+        return blocked(f"contact is suppressed ({reason})")
+    if state.has_unresolved_issue:
+        return blocked("an issue is still unresolved")
+    if has_open_review:
+        return blocked("a human review is open for this conversation")
+
+    presented = state.offer_kinds_presented()
+
+    if kind == "referral_ask" and state.referral_already_committed:
+        # John: the customer already said they'll recommend us. Don't pitch the
+        # terms again — send their own referral link instead (once).
+        kind = "referral_link"
+
+    if kind == "review_request":
+        if not client.review_link:
+            return blocked("client has no review link configured")
+        if "review_link" in presented:
+            return blocked("review link was already sent")
+        return CampaignCheck(True, kind, requested, "review request allowed", [A.REVIEW_REQUEST])
+
+    if not client.referral_program:
+        return blocked("client has no referral program configured")
+
+    if kind == "referral_ask":
+        if "referral_terms" in presented:
+            return blocked("referral terms were already presented")
+        return CampaignCheck(
+            True, kind, requested, "referral ask allowed", [A.REFERRAL_ASK, A.REFERRAL_LINK_SEND]
+        )
+
+    # referral_link
+    if "referral_link" in presented:
+        return blocked("referral link was already sent")
+    reason = (
+        "customer already committed to refer: sending their personal link instead of the pitch"
+        if requested == "referral_ask"
+        else "referral link allowed"
+    )
+    return CampaignCheck(True, kind, requested, reason, [A.REFERRAL_LINK_SEND])

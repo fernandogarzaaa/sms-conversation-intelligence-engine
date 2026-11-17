@@ -1,97 +1,192 @@
 {% extends "base.html" %}
-{% block title %}Review · the SMS Engine{% endblock %}
+{% block title %}Review · SMS Engine{% endblock %}
 {% block body %}
 {% set r = d.review %}
-<h1>Review — <span class="mono">{{ d.contact_id }}</span>
-  <span class="pill {{ 'bad' if r.risk_level in ['HIGH','CRITICAL'] else 'warn' }}">{{ r.risk_level }}</span>
-  <span class="pill accent">recommended: {{ r.recommended_action }}</span>
+{% set st = d.conversation.state %}
+{% set t = d.trace %}
+{% set reasons = review_reasons(t.policy if t else none) %}
+{% set is_open = r.status == 'OPEN' %}
+<h1>
+  <span>Review · <span class="mono">{{ d.contact_id }}</span></span>
+  {% if st.identity and st.identity.name %}<span class="pill accent">{{ st.identity.name }}</span>{% endif %}
+  <span class="pill {{ 'bad' if r.risk_level in ['HIGH','CRITICAL'] else ('warn' if r.risk_level == 'MEDIUM' else 'good') }}">{{ r.risk_level }} risk</span>
+  {% if r.kind and r.kind != 'REPLY' %}<span class="pill">{{ r.kind|lower }}</span>{% endif %}
+  <a class="small" href="/ui/conversations/{{ r.conversation_id }}" style="margin-left:auto">Open conversation →</a>
 </h1>
+
+{% if not is_open %}
+<div class="callout {{ 'warn' if r.status == 'SUPERSEDED' else 'none' }}">
+  <span><strong>{{ r.status|capitalize }}.</strong>
+  {% if r.status == 'SUPERSEDED' %}The customer sent a newer message after this draft was written, so it can no longer be sent. Decide the newer review instead.
+  {% else %}Decided {{ r.decided_at|ts }} by {{ r.reviewer or "—" }}: <span class="mono">{{ r.action }}</span>.{% endif %}</span>
+</div>
+{% endif %}
 
 <div class="two">
   <div>
-    <h2>Conversation</h2>
-    <div class="thread">
-      {% for m in d.conversation.messages %}
-        <div class="msg {{ 'IN' if m.direction == 'INBOUND' else 'OUT' }}">
-          {{ m.raw_text }}
-          <div class="t">{{ m.direction }} · {{ m.created_at }}</div>
-        </div>
-      {% endfor %}
+    {% if r.kind == 'REPLY' or not r.kind %}
+    <h2>Customer wrote</h2>
+    <div class="card" style="font-size:15px">{{ d.customer_message or "—" }}</div>
+    {% endif %}
+
+    <div class="callout {{ 'bad' if r.risk_level in ['HIGH','CRITICAL'] else 'warn' }}" style="margin-top:14px">
+      <div>
+        <strong>Why this needs you</strong>
+        {% if reasons %}
+          <ul>{% for x in reasons %}<li>{{ x }}</li>{% endfor %}</ul>
+        {% elif r.kind == 'CAMPAIGN' %}
+          <div class="small">Campaign messages are set to require approval. {{ r.notes or "" }}</div>
+        {% elif r.kind == 'FOLLOWUP' %}
+          <div class="small">The customer volunteered a future need. Follow-ups always need a person to approve them. {{ r.notes or "" }}</div>
+        {% else %}
+          <div class="small">{{ t.policy.summary if t else "No decision trace for this item." }}</div>
+        {% endif %}
+        <div class="small" style="margin-top:6px">Recommended: <span class="route-{{ r.recommended_action }}">{{ r.recommended_action }}</span></div>
+      </div>
     </div>
 
-    <h2>Current message</h2>
-    <div class="card">{{ d.customer_message }}</div>
+    <h2><label for="draft">Reply to send</label></h2>
+    <form method="post" action="/ui/reviews/{{ r.id }}/decide" id="decide">
+      <textarea id="draft" name="edited_text" maxlength="1600" {{ 'disabled' if not is_open }}
+        aria-describedby="draft-status">{{ r.generated_response or "" }}</textarea>
+      <div class="row small" id="draft-status">
+        <span id="chars"></span>
+        <span>limit {{ d.client_context.max_sms_chars or 320 }} characters</span>
+      </div>
+      <div class="findings" id="findings" aria-live="polite">
+        {% if t and t.validation and t.validation.findings %}
+          {% for f in t.validation.findings %}
+            <span class="pill {{ 'bad' if f.severity=='reject' else 'warn' }}">{{ f.code }}: {{ f.message }}</span>
+          {% endfor %}
+        {% elif r.generated_response %}<span class="pill good">validators passed</span>{% endif %}
+      </div>
+      <div style="margin-top:10px">
+        <label for="notes">Notes (optional, stored with the decision)</label>
+        <input type="text" id="notes" name="notes" style="width:100%" maxlength="1000" {{ 'disabled' if not is_open }}>
+      </div>
+      <div class="actions">
+        <button name="action" value="APPROVE" id="send" {{ 'disabled' if not is_open }}>Send reply</button>
+        <button name="action" value="REJECT" class="ghost" {{ 'disabled' if not is_open }}>Reject draft</button>
+        <button name="action" value="SUPPRESS" class="bad" {{ 'disabled' if not is_open }}
+          onclick="return confirm('Suppress all campaign messages for this contact?')">Suppress contact</button>
+        <button name="action" value="ESCALATE" class="bad" {{ 'disabled' if not is_open }}
+          onclick="return confirm('Escalate to a manager and hold all automated messages?')">Escalate</button>
+      </div>
+      <p class="small">Edited or not, the reply runs through the same validators as an automatic one. It is checked
+      against the conversation as it is now, so it cannot add a referral ask to a thread with an open issue or
+      reach a contact who opted out. Every decision is stored as evaluation data.</p>
+    </form>
 
-    <h2>Detected intents</h2>
-    <div>
-      {% for i in r.model_classification.intents %}
-        <span class="pill">{{ i.type }} · {{ i.confidence }}</span>
-      {% endfor %}
-    </div>
+    <details {{ 'open' if (d.conversation.messages|length) <= 4 }}>
+      <summary>Conversation ({{ d.conversation.messages|length }} messages)</summary>
+      <div class="thread">
+        {% for m in d.conversation.messages %}
+          <div class="msg {{ 'IN' if m.direction == 'INBOUND' else 'OUT' }}{{ ' current' if m.id == r.message_id }}">
+            {{ m.raw_text }}
+            <div class="t">{{ 'Customer' if m.direction == 'INBOUND' else 'Sent' }} · {{ m.created_at|ts }}</div>
+          </div>
+        {% endfor %}
+      </div>
+    </details>
 
-    <h2>Extracted entities</h2>
-    <div class="kv">
-      {% for k, val in d.trace.entities.items() if val not in [none, "", false, []] and k not in ['raw','model_used','latency_ms'] %}
-        <div>{{ k }}</div><div class="mono">{{ val }}</div>
-      {% endfor %}
-    </div>
+    {% if t %}
+    <details>
+      <summary>What the system read</summary>
+      <div class="pills" style="margin-bottom:10px">
+        {% for i in r.model_classification.intents %}
+          <span class="pill">{{ i.type }} · {{ '%.2f'|format(i.confidence) }}</span>
+        {% else %}<span class="small">No intents detected.</span>{% endfor %}
+      </div>
+      <div class="kv">
+        {% for k, val in t.entities.items() if val not in [none, "", false, []] and k not in ['raw','model_used','latency_ms'] %}
+          <div>{{ k|replace('_', ' ') }}</div><div class="mono">{{ val }}</div>
+        {% endfor %}
+      </div>
+    </details>
 
-    <h2>Decision trace</h2>
-    <div class="trace mono">{{ d.trace.rendered }}</div>
+    <details>
+      <summary>Decision trace</summary>
+      <div class="trace mono">{{ t.rendered }}</div>
+    </details>
+    {% endif %}
   </div>
 
   <div>
-    <h2>Conversation state</h2>
+    <h2>Customer state</h2>
     <div class="kv">
-      <div>identity</div><div class="mono">{{ d.conversation.state.identity.name or "—" }}
-        {% if d.conversation.state.identity.previous_name %}(was {{ d.conversation.state.identity.previous_name }}){% endif %}</div>
-      <div>referral status</div><div class="mono">{{ d.conversation.state.referral_status }}</div>
-      <div>open issues</div><div class="mono">{{ d.conversation.state.open_issues|length }}</div>
-      <div>offers presented</div><div class="mono">{{ d.conversation.state.offers_presented|map(attribute='kind')|list|join(', ') or "—" }}</div>
-      <div>suppression</div><div class="mono">{{ d.conversation.state.suppression.reason or "none" }}</div>
-      <div>future intents</div><div class="mono">{{ d.conversation.state.future_intents|length }}</div>
-      <div>campaign status</div><div class="mono">{{ d.conversation.state.campaign_status }}</div>
-      <div>event version</div><div class="mono">{{ d.conversation.state.version }}</div>
+      <div>Name</div><div>{{ st.identity.name or "—" }}{% if st.identity.previous_name %} <span class="small">(was {{ st.identity.previous_name }})</span>{% endif %}</div>
+      <div>Open issues</div><div>{{ st.open_issues|rejectattr('resolved')|list|length }}</div>
+      <div>Suppression</div><div>{% if st.suppression.active %}<span class="pill bad">{{ st.suppression.reason }}</span>{% else %}none{% endif %}</div>
+      <div>Referral</div><div class="mono">{{ st.referral_status }}</div>
+      <div>Already sent</div><div class="mono">{{ st.offers_presented|map(attribute='kind')|list|join(', ') or "—" }}</div>
+      <div>Campaign</div><div class="mono">{{ st.campaign_status }}</div>
     </div>
 
+    {% if t %}
     <h2>Policy</h2>
     <div class="kv">
-      <div>routing</div><div class="route-{{ d.trace.policy.routing }} mono">{{ d.trace.policy.routing }}</div>
-      <div>risk</div><div class="mono">{{ d.trace.policy.risk }}</div>
-      <div>forbidden</div><div class="mono">{{ d.trace.policy.forbidden_actions|join(', ') or "—" }}</div>
-      <div>allowed</div><div class="mono">{{ d.trace.policy.allowed_actions|join(', ') or "—" }}</div>
+      <div>Routing</div><div class="route-{{ t.policy.routing }} mono">{{ t.policy.routing }}</div>
+      <div>Not allowed</div><div class="mono small">{{ t.policy.forbidden_actions|join(', ') or "—" }}</div>
+      <div>Allowed</div><div class="mono small">{{ t.policy.allowed_actions|join(', ') or "—" }}</div>
     </div>
-    <div class="small" style="margin-top:6px">{{ d.trace.policy.summary }}</div>
+    {% endif %}
 
-    <h2>Client context</h2>
-    <div class="kv">
-      <div>brand voice</div><div class="small">{{ d.client_context.brand_voice }}</div>
-      <div>review link</div><div class="mono">{{ d.client_context.review_link }}</div>
-      <div>forbidden claims</div><div class="small">{{ d.client_context.forbidden_claims|join(', ') }}</div>
-    </div>
-
-    <h2>Generated response (draft)</h2>
-    <form method="post" action="/ui/reviews/{{ r.id }}/decide">
-      <textarea name="edited_text">{{ r.generated_response or "" }}</textarea>
-      <div class="small">
-        {% if d.trace.validation and d.trace.validation.findings %}
-          {% for f in d.trace.validation.findings %}
-            <span class="pill {{ 'bad' if f.severity=='reject' else 'warn' }}">{{ f.code }}: {{ f.message }}</span>
-          {% endfor %}
-        {% else %}<span class="pill good">validators passed</span>{% endif %}
+    <details>
+      <summary>Client context</summary>
+      <div class="kv">
+        <div>Client</div><div>{{ d.client_context.name }}</div>
+        <div>Brand voice</div><div class="small">{{ d.client_context.brand_voice }}</div>
+        <div>Booking</div><div class="small">{{ d.client_context.booking_policy or "—" }}</div>
+        <div>Review link</div><div class="mono small">{{ d.client_context.review_link or "—" }}</div>
+        <div>Never say</div><div class="small">{{ d.client_context.forbidden_claims|join(', ') or "—" }}</div>
       </div>
-      <input type="text" name="reviewer" value="reviewer" style="margin-top:8px">
-      <input type="text" name="notes" placeholder="notes (optional)" size="40">
-      <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
-        <button name="action" value="APPROVE">Approve</button>
-        <button name="action" value="EDIT_AND_SEND" class="ghost">Edit &amp; Send</button>
-        <button name="action" value="REJECT" class="ghost">Reject</button>
-        <button name="action" value="SUPPRESS" class="bad">Suppress</button>
-        <button name="action" value="ESCALATE" class="bad">Escalate</button>
-      </div>
-    </form>
-    <p class="small">Every decision here is stored as evaluation data: model classification, model
-    confidence, generated response, human action, human edits, final response.</p>
+    </details>
   </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  var ta = document.getElementById('draft');
+  if (!ta || ta.disabled) return;
+  var original = ta.value;
+  var send = document.getElementById('send');
+  var findings = document.getElementById('findings');
+  var chars = document.getElementById('chars');
+  var timer = null;
+
+  function esc(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+  function norm(s) { return s.trim().replace(/\s+/g, ' '); }
+
+  function update() {
+    var edited = norm(ta.value) !== norm(original);
+    send.value = edited ? 'EDIT_AND_SEND' : 'APPROVE';
+    send.textContent = edited ? 'Send edited reply' : 'Send reply';
+    chars.textContent = ta.value.trim().length + ' characters';
+    clearTimeout(timer);
+    timer = setTimeout(validate, 300);
+  }
+
+  function validate() {
+    var body = new URLSearchParams();
+    body.set('text', ta.value);
+    fetch('/ui/reviews/{{ d.review.id }}/validate', {method: 'POST', body: body, credentials: 'same-origin'})
+      .then(function (res) { return res.json(); })
+      .then(function (j) {
+        if (!j || j.error) return;
+        var html = j.findings.map(function (f) {
+          return '<span class="pill ' + (f.severity === 'reject' ? 'bad' : 'warn') + '">' + esc(f.code + ': ' + f.message) + '</span>';
+        }).join('');
+        findings.innerHTML = html || '<span class="pill good">validators passed</span>';
+        send.disabled = !j.passed;
+        send.title = j.passed ? '' : 'Fix the rejected items before sending';
+      })
+      .catch(function () {});
+  }
+
+  ta.addEventListener('input', update);
+  update();
+})();
+</script>
 {% endblock %}

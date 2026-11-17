@@ -1,7 +1,7 @@
 """Generate the synthetic evaluation dataset.
 
 Deterministic: running this again produces byte-identical output. The messages
-are invented for evaluation only — they are NOT real the business customer data.
+are invented for evaluation only — they are NOT real customer data.
 
 Output: data/seed/inbound_messages.jsonl  (one JSON object per line)
   { "id", "text", "expected_intents": [...], "notes", "synthetic": true }

@@ -17,14 +17,13 @@ from sms_engine.ai import (
 )
 from sms_engine.ai.provider import LLMProvider
 from sms_engine.application.config import AutomationConfig
+from sms_engine.application.send_queue import SendQueue
 from sms_engine.application.timing import TimingEngine
 from sms_engine.application.variants import VariantPool
-from sms_engine.application.send_queue import SendQueue
 from sms_engine.context.retrieval import ContextRetriever
 from sms_engine.infrastructure.clock import Clock, FixedClock, SystemClock
 from sms_engine.infrastructure.db import Database
 from sms_engine.infrastructure.ids import IdFactory
-from sms_engine.infrastructure.rng import Rng
 from sms_engine.infrastructure.repositories import (
     ClientRepo,
     ConversationRepo,
@@ -35,6 +34,8 @@ from sms_engine.infrastructure.repositories import (
     ReviewRepo,
     TraceRepo,
 )
+from sms_engine.infrastructure.rng import Rng
+from sms_engine.infrastructure.transport import LogTransport, SmsTransport
 from sms_engine.policy.engine import PolicyEngine
 from sms_engine.validation.engine import ResponseValidator
 
@@ -65,6 +66,20 @@ class Engine:
     timing: TimingEngine
     variants: VariantPool
     queue: SendQueue
+    transport: SmsTransport
+    # fallback recipient timezone when a client pack sets none
+    default_timezone: str | None = None
+
+    @property
+    def provider_name(self) -> str:
+        return getattr(self.classifier.provider, "name", "unknown")
+
+    @property
+    def provider_model(self) -> str | None:
+        return getattr(self.classifier.provider, "model", None)
+
+    def client_timezone(self, client) -> str | None:
+        return (getattr(client, "timezone", None) if client else None) or self.default_timezone
 
     def close(self) -> None:
         self.db.close()
@@ -79,6 +94,8 @@ def build_engine(
     provider: LLMProvider | None = None,
     config: AutomationConfig | None = None,
     tz_offset_hours: int = -5,
+    default_timezone: str | None = None,
+    transport: SmsTransport | None = None,
 ) -> Engine:
     db = Database(db_path)
     clock = clock or SystemClock()
@@ -105,15 +122,21 @@ def build_engine(
         reviews=ReviewRepo(conn),
         traces=TraceRepo(conn),
         followups=FollowupRepo(conn),
-        classifier=MultiIntentClassifier(provider),
+        # with a real model, the rule-based classifier is the fallback during an
+        # outage, so opt-outs and suppression keep working deterministically
+        classifier=MultiIntentClassifier(
+            provider, fallback=None if isinstance(provider, MockProvider) else MockProvider()
+        ),
         extractor=EntityExtractor(provider),
         generator=ResponseGenerator(provider),
         retriever=ContextRetriever(),
         policy=PolicyEngine(config),
         validator=ResponseValidator(),
-        timing=TimingEngine(rng, tz_offset_hours=tz_offset_hours),
+        timing=TimingEngine(rng, tz_offset_hours=tz_offset_hours, is_taken=planned.send_after_taken),
         variants=VariantPool(rng=rng),
         queue=SendQueue(planned=planned, events=events, ids=ids),
+        transport=transport or LogTransport(),
+        default_timezone=default_timezone,
     )
 
 

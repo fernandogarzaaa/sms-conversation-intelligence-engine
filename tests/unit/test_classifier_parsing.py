@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
-import pytest
-
 from sms_engine.ai.classifier import MultiIntentClassifier
 from sms_engine.ai.mock_provider import MockProvider
 from sms_engine.ai.provider import LLMProvider, ProviderResponse

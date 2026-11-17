@@ -98,6 +98,10 @@ class ContextIngestor:
             approved_phrases=approved_phrases,
             allowed_url_domains=list(cfg.get("allowed_url_domains", [])),
             max_sms_chars=int(cfg.get("max_sms_chars", 320)),
+            timezone=cfg.get("timezone") or None,
+            phone_numbers=[str(n) for n in cfg.get("phone_numbers", [])],
+            sms_from_number=cfg.get("sms_from_number") or None,
+            campaign_templates=dict(cfg.get("campaign_templates", {})),
             sources=list(raw.sources) or ["config"],
             synthetic=bool(cfg.get("synthetic", True)),
         )

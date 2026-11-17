@@ -1,0 +1,18 @@
+# Local stack: API + dashboard with the in-process worker.
+#   docker compose up --build      ->  http://127.0.0.1:8099
+services:
+  engine:
+    build: .
+    ports:
+      - "127.0.0.1:8099:8099"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      SMS_ENGINE_WORKER_INTERVAL: "15"
+    volumes:
+      - engine-data:/var/lib/sms-engine
+    restart: unless-stopped
+
+volumes:
+  engine-data:
