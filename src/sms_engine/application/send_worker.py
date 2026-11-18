@@ -10,9 +10,12 @@ Three guards run at send time, in addition to the planning-time checks:
    recipient's local time is outside the send window, the message is moved to
    the next morning window instead of going out at night.
 
-Delivery is claim -> send -> finalise. The claim (status SENDING) is committed
-before the network call, so the database lock is never held across I/O and two
-workers can never send the same message. Transport failures are retried with
+Delivery is check -> claim -> send -> finalise, one message at a time. The
+checks run immediately before each claim, so an opt-out that arrives while an
+earlier message is in flight still stops the next one. The claim is a
+conditional PLANNED -> SENDING update inside a `BEGIN IMMEDIATE` transaction,
+committed before the network call: the database lock is never held across I/O,
+and two workers (threads or processes) can never send the same message. Transport failures are retried with
 exponential backoff up to `sending.max_attempts`, then marked FAILED.
 """
 
@@ -40,37 +43,56 @@ class SendWorker:
     def process_due(self, now: datetime | None = None) -> list[Message]:
         e = self.e
         now = now or e.clock.now()
-        claimed: list[PlannedResponse] = []
-
-        with e.db.transaction():
-            for p in e.queue.due(now):
-                state = self._state(p.conversation_id)
-                blocked = self._blocked_reason(p, state)
-                if blocked:
-                    self._cancel(p, now, blocked)
-                    continue
-                client = e.clients.get(state.client_id)
-                tz = e.client_timezone(client)
-                if not e.timing.in_window(now, tz):
-                    nxt = e.timing.schedule(
-                        now, char_len=0, intent_count=1, is_question=False,
-                        salt=f"requeue:{p.id}:{p.send_attempts}", tz=tz,
-                        min_delay_seconds=0,
-                    ).send_after
-                    if not e.timing.in_window(nxt, tz):  # pragma: no cover - defensive
-                        nxt = now + timedelta(hours=1)
-                    p.send_after = nxt
-                    e.planned.save(p)
-                    continue
-                e.planned.set_status(p.id, "SENDING")
-                claimed.append(p)
+        due_ids = [p.id for p in e.planned.due(now)]
 
         sent: list[Message] = []
-        for p in claimed:
-            out = self._deliver(p, now)
+        for pid in due_ids:
+            # Re-check and claim each message on its own, immediately before it is
+            # delivered: a STOP or a new message that arrives while an earlier
+            # message is in flight must still stop this one.
+            claimed = self._check_and_claim(pid, now)
+            if claimed is None:
+                continue
+            out = self._deliver(claimed, now)
             if out is not None:
                 sent.append(out)
         return sent
+
+    def _check_and_claim(self, pid: str, now: datetime) -> PlannedResponse | None:
+        e = self.e
+        with e.db.transaction():
+            p = e.planned.get(pid)
+            if p is None or p.status != "PLANNED" or (p.send_after and p.send_after > now):
+                return None  # another worker took it, or it was cancelled / rescheduled
+            current = e.events.input_version(p.conversation_id)
+            if p.built_at_version < current:
+                e.planned.set_status(p.id, "INVALIDATED")
+                self._event(p, EventType.RESPONSE_INVALIDATED, now,
+                            {"planned_response_id": p.id, "reason": "stale at send time",
+                             "built_at_version": p.built_at_version, "current_version": current})
+                return None
+            state = self._state(p.conversation_id)
+            blocked = self._blocked_reason(p, state)
+            if blocked:
+                self._cancel(p, now, blocked)
+                return None
+            client = e.clients.get(state.client_id)
+            tz = e.client_timezone(client)
+            if not e.timing.in_window(now, tz):
+                nxt = e.timing.schedule(
+                    now, char_len=0, intent_count=1, is_question=False,
+                    salt=f"requeue:{p.id}:{p.send_attempts}", tz=tz,
+                    min_delay_seconds=0,
+                ).send_after
+                if not e.timing.in_window(nxt, tz):  # pragma: no cover - defensive
+                    nxt = now + timedelta(hours=1)
+                p.send_after = nxt
+                e.planned.save(p)
+                return None
+            if not e.planned.claim(p.id):
+                return None
+            p.status = "SENDING"
+            return p
 
     def recover_stuck(self, now: datetime | None = None, *, older_than_minutes: int = 15) -> list[str]:
         """Mark responses stuck in SENDING (worker died mid-send) as FAILED.
@@ -109,6 +131,12 @@ class SendWorker:
             return f"contact suppressed ({reason}) after this response was planned"
         if p.kind in ("CAMPAIGN", "FOLLOWUP") and state.has_unresolved_issue:
             return "an issue is open; campaign/follow-up messages are held"
+        if p.kind == "CAMPAIGN":
+            presented = state.offer_kinds_presented()
+            repeated = sorted(A.OFFER_KIND_FOR_ACTION[a] for a in p.actions
+                              if a in A.OFFER_KIND_FOR_ACTION and A.OFFER_KIND_FOR_ACTION[a] in presented)
+            if repeated:
+                return f"already sent to this contact ({', '.join(repeated)})"
         return None
 
     def _cancel(self, p: PlannedResponse, now: datetime, reason: str) -> None:

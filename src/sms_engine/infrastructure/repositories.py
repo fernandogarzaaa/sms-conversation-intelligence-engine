@@ -393,6 +393,18 @@ class PlannedResponseRepo:
         self.conn.execute("UPDATE planned_responses SET status=? WHERE id=?", (status, id))
         self.conn.commit()
 
+    def claim(self, id: str) -> bool:
+        """Atomically move one response from PLANNED to SENDING.
+
+        Conditional on the current status, so when several workers (threads or
+        processes sharing the file) race for the same row, exactly one wins.
+        """
+        r = self.conn.execute(
+            "UPDATE planned_responses SET status='SENDING' WHERE id=? AND status='PLANNED'", (id,)
+        )
+        self.conn.commit()
+        return r.rowcount == 1
+
     def record_send_failure(
         self, id: str, *, error: str, retry_at: datetime | None, give_up: bool
     ) -> None:

@@ -1,7 +1,7 @@
 # Technical Handoff — SMS Conversation Intelligence Engine
 
 **Audience:** the engineering team.
-**Status:** v0.2.0 — the intelligence / application layer plus the integration seams (real model providers, Twilio transport and webhook, auth, worker). 225 tests passing. See [CHANGELOG.md](CHANGELOG.md) for what changed from the v0.1 prototype.
+**Status:** v0.2.0 — the intelligence / application layer plus the integration seams (real model providers, Twilio transport and webhook, auth, worker). 230 tests passing. See [CHANGELOG.md](CHANGELOG.md) for what changed from the v0.1 prototype.
 **Read first:** [ARCHITECTURE.md](ARCHITECTURE.md), [DECISIONS.md](DECISIONS.md), [SECURITY.md](SECURITY.md), [EVALUATION.md](EVALUATION.md), [DEMO.md](DEMO.md).
 
 > ### The one thing to be clear about
@@ -456,7 +456,7 @@ additions are `POST /webhooks/twilio/sms`, `POST /jobs/completed`,
 
 ## 17. Testing
 
-`pytest` → **225 passed** (a few seconds, fully offline & deterministic). The v0.1
+`pytest` → **230 passed** (a few seconds, fully offline & deterministic). The v0.1
 suites below are unchanged; v0.2 adds `test_storage_and_safety.py` (migrations,
 transactions, concurrency, idempotency, fail-safe), `test_review_guards.py`,
 `test_campaigns_and_sending.py`, `test_model_independence.py`,
@@ -624,7 +624,7 @@ auto.
 python -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
 
-pytest                          # 225 tests
+pytest                          # 230 tests
 sms-engine demo                 # scenarios A–G + decision traces
 sms-engine demo maya john       # just the two failure cases
 

@@ -339,7 +339,7 @@ tests/             unit, integration, end-to-end, adversarial, API, CLI
 ## 14. Tests and evaluation
 
 ```bash
-pytest                     # 225 tests, offline and deterministic
+pytest                     # 230 tests, offline and deterministic
 pytest --cov               # with coverage
 ruff check src tests scripts
 ```

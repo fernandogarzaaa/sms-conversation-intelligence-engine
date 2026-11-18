@@ -9,7 +9,7 @@ Two ways to demo: **console** (fast, shows decision traces) and **web dashboard*
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
-pytest                           # 225 tests, a few seconds
+pytest                           # 230 tests, a few seconds
 ```
 
 ## A. Console demo (2 minutes)

@@ -169,7 +169,7 @@ Chronological, honest record of what was built and its state.
 
 ### Phase 26 — Tooling and docs
 - Dockerfile, compose, Makefile, CI (ruff + pytest on 3.11–3.13 + demo + image
-  build). Tests 93 → 225. All documents updated; CHANGELOG added.
+  build). Tests 93 → 230. All documents updated; CHANGELOG added.
 
 ## Not done / integration points (honest)
 - No CRM connection (the `POST /jobs/completed` and `POST /events` endpoints are

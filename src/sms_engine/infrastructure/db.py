@@ -13,9 +13,11 @@ keep that safe:
 1. Every statement runs under a process-wide re-entrant lock and its rows are
    materialised before the lock is released (`SafeConnection.execute`).
 2. Multi-statement units of work (one inbound message, one review decision, one
-   send-worker pass) run inside `Database.transaction()`, which holds the lock
-   for the whole unit and commits once at the end — or rolls everything back on
-   error, so a crash half-way through never leaves a partial decision behind.
+   send-worker claim) run inside `Database.transaction()`, which holds the lock
+   for the whole unit, opens it with `BEGIN IMMEDIATE` (SQLite's write lock, so
+   other *processes* on the same file are serialised too), and commits once at
+   the end — or rolls everything back on error, so a crash half-way through
+   never leaves a partial decision behind.
 
 Repositories call `conn.commit()` after each write; inside a transaction that
 call is a no-op, outside one it commits immediately (the old behaviour).
@@ -224,6 +226,10 @@ class SafeConnection:
     def transaction(self) -> Iterator[SafeConnection]:
         """Run a unit of work atomically. Nests: only the outermost level commits."""
         with self._lock:
+            if self._depth == 0 and not self._raw.in_transaction:
+                # take SQLite's write lock up front, so reads and writes in the unit
+                # are serialised across *processes* sharing the file, not just threads
+                self._raw.execute("BEGIN IMMEDIATE")
             self._depth += 1
             try:
                 yield self

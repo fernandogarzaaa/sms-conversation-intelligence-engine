@@ -175,5 +175,5 @@ sending, follow-ups, model independence, providers with mocked HTTP) →
 integration (SMS→…→validator) → e2e (scenarios A–G) → adversarial (prompt
 injection, hidden opt-out, identity flips, rapid consecutive messages,
 contradictions, long/malformed input) → API (auth, webhook signatures,
-idempotency) → CLI. 225 tests, offline and deterministic. See
+idempotency) → CLI. 230 tests, offline and deterministic. See
 [EVALUATION.md](EVALUATION.md).

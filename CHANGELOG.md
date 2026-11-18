@@ -37,6 +37,16 @@ the work is the missing integration, safety fixes, and operations.
 - **Partial decisions on crash.** An exception mid-pipeline left half-written
   events. The analysis now rolls back and the message goes to a high-risk review.
 
+- **Send worker (review findings).** Due messages are now checked and claimed
+  one at a time, immediately before delivery, so an opt-out arriving while an
+  earlier message is in flight still stops the next one. The claim is a
+  conditional `PLANNED → SENDING` update and transactions open with
+  `BEGIN IMMEDIATE`, so two worker processes on one database file cannot both
+  send a message.
+- **Duplicate campaign steps (review finding).** Triggering the same step twice
+  before the first was sent queued it twice. Pending steps now block an
+  equivalent one, and the send worker refuses a campaign offer already sent.
+
 ### Added
 
 - Real model providers: OpenAI, OpenRouter, local OpenAI-compatible servers
@@ -73,7 +83,7 @@ the work is the missing integration, safety fixes, and operations.
 - Review page redesign: the decision first (customer message, plain-language
   reasons, draft with live validation), detail in collapsible sections; light
   and dark themes; responsive layout; flash messages that say what happened.
-- Tests: 93 → 225.
+- Tests: 93 → 230.
 
 ### Changed
 

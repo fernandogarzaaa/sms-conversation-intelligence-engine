@@ -134,9 +134,15 @@ class CampaignService:
                 raise ValueError(f"unknown campaign kind {kind!r}; expected one of {list(CAMPAIGN_KINDS)}")
             client = e.clients.get(conv["client_id"])
             state = self._state(conv)
+            pending = {
+                (pl.variant_id or "").split(":", 1)[-1]
+                for pl in e.planned.for_conversation(conversation_id)
+                if pl.kind == "CAMPAIGN" and pl.status in ("PLANNED", "PENDING_REVIEW", "SENDING")
+            }
             check = campaign_check(
                 kind, state, client, e.config,
                 has_open_review=bool(e.reviews.open_for_conversation(conversation_id)),
+                pending_kinds=pending,
             )
             decision = CampaignDecision(
                 conversation_id=conversation_id, requested_kind=kind, kind=check.kind,

@@ -479,6 +479,13 @@ class CampaignCheck:
 
 CAMPAIGN_KINDS = ("review_request", "referral_ask", "referral_link")
 
+# a referral ask carries the referral link, so the two clash with each other
+_PENDING_CLASH = {
+    "review_request": {"review_request"},
+    "referral_ask": {"referral_ask", "referral_link"},
+    "referral_link": {"referral_link", "referral_ask"},
+}
+
 
 def campaign_check(
     kind: str,
@@ -487,6 +494,7 @@ def campaign_check(
     config: AutomationConfig,
     *,
     has_open_review: bool = False,
+    pending_kinds: set[str] | frozenset[str] = frozenset(),
 ) -> CampaignCheck:
     """Decide deterministically whether a campaign step may be sent now.
 
@@ -519,6 +527,12 @@ def campaign_check(
         # John: the customer already said they'll recommend us. Don't pitch the
         # terms again — send their own referral link instead (once).
         kind = "referral_link"
+
+    # an equivalent step already queued (or awaiting approval) but not yet sent:
+    # offers are only recorded on send, so check the queue as well
+    clash = _PENDING_CLASH.get(kind, {kind}) & set(pending_kinds)
+    if clash:
+        return blocked(f"a {sorted(clash)[0].replace('_', ' ')} is already queued for this contact")
 
     if kind == "review_request":
         if not client.review_link:
