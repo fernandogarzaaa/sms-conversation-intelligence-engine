@@ -39,6 +39,14 @@ class ClientContext(BaseModel):
     # deterministic validator inputs
     allowed_url_domains: list[str] = Field(default_factory=list)
     max_sms_chars: int = 320
+    # recipient-local timezone for quiet hours (IANA name, e.g. "America/Chicago")
+    timezone: str | None = None
+    # inbound numbers this client owns (E.164); routes provider webhooks to the client
+    phone_numbers: list[str] = Field(default_factory=list)
+    # sender number for outbound SMS (E.164); defaults to the first phone number
+    sms_from_number: str | None = None
+    # optional overrides for campaign copy: keys review_request | referral_ask | referral_link
+    campaign_templates: dict[str, str] = Field(default_factory=dict)
     # provenance of the pack
     sources: list[str] = Field(default_factory=list)
     synthetic: bool = True

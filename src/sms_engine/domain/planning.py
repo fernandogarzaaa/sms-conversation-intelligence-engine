@@ -22,8 +22,14 @@ class PlannedResponse(BaseModel):
     validation: ValidationResult = Field(default_factory=ValidationResult.ok)
     send_after: datetime | None = None
     created_at: datetime
-    status: str = "PLANNED"  # PLANNED | INVALIDATED | SENT | REJECTED | PENDING_REVIEW
+    # PLANNED | INVALIDATED | CANCELLED | SENT | FAILED | REJECTED | PENDING_REVIEW
+    status: str = "PLANNED"
+    # REPLY (answers an inbound message) | CAMPAIGN (review/referral step) | FOLLOWUP
+    kind: str = "REPLY"
     model_used: str = "unknown"
     generation_latency_ms: float = 0.0
     # actions this response performs (so validators/policy can check them)
     actions: list[str] = Field(default_factory=list)
+    # outbound transport bookkeeping
+    send_attempts: int = 0
+    last_error: str | None = None

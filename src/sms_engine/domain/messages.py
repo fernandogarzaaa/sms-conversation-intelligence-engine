@@ -28,6 +28,8 @@ class Message(BaseModel):
     # For outbound: which variant template produced it, and whether a human touched it.
     variant_id: str | None = None
     human_edited: bool = False
+    # SMS-provider id (e.g. Twilio MessageSid). Unique when present: the idempotency key.
+    provider_message_id: str | None = None
     meta: dict = Field(default_factory=dict)
 
     @property

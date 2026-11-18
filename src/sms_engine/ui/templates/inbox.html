@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Inbox · the SMS Engine{% endblock %}
+{% block title %}Inbox · SMS Engine{% endblock %}
 {% block body %}
 <h1>Review inbox</h1>
 
@@ -16,32 +16,32 @@
 </div>
 {% endif %}
 
-<table class="rowlink">
+<div class="tablewrap"><table class="rowlink">
   <tr><th>Risk</th><th>Contact</th><th>Message</th><th>Intents</th><th>Conf.</th><th>Recommended</th><th></th></tr>
   {% for r in queue %}
   {% set ints = r.model_classification.intents %}
   <tr data-href="/ui/reviews/{{ r.id }}">
     <td><span class="pill {{ 'bad' if r.risk_level in ['HIGH','CRITICAL'] else 'warn' }}">{{ r.risk_level }}</span></td>
     <td class="mono">{{ r.contact_id }}</td>
-    <td>{{ r.customer_message }}</td>
+    <td>{% if r.kind and r.kind != 'REPLY' %}<span class="pill">{{ r.kind|lower }}</span> {{ r.generated_response }}{% else %}{{ r.customer_message }}{% endif %}</td>
     <td class="small">
       {# compact: top 2 intents + "+N"; the full list is on the review page #}
       <span class="pills">
-        {% for i in ints[:2] %}<span class="pill">{{ i.type }} {{ i.confidence }}</span>{% endfor %}
+        {% for i in ints[:2] %}<span class="pill">{{ i.type }} {{ '%.2f'|format(i.confidence) }}</span>{% endfor %}
         {% if ints|length > 2 %}<span class="pill more">+{{ ints|length - 2 }} more</span>{% endif %}
         {% if not ints %}<span class="small">—</span>{% endif %}
       </span>
     </td>
-    <td>{{ r.model_confidence }}</td>
+    <td class="num">{{ '%.2f'|format(r.model_confidence) if r.model_confidence is not none else '—' }}</td>
     <td class="route-{{ r.recommended_action }}">{{ r.recommended_action }}</td>
     <td><a class="btn" href="/ui/reviews/{{ r.id }}">Review</a></td>
   </tr>
   {% endfor %}
   {% if not queue %}<tr><td colspan="7" class="small">Nothing waiting for a human.</td></tr>{% endif %}
-</table>
+</table></div>
 
 <h2>All conversations</h2>
-<table>
+<div class="tablewrap"><table>
   <tr><th>Contact</th><th>Name</th><th>Msgs</th><th>Suppression</th><th>Last routing</th><th></th></tr>
   {% for c in conversations %}
   <tr>
@@ -51,5 +51,5 @@
     <td><a class="btn" href="/ui/conversations/{{ c.id }}">Open</a></td>
   </tr>
   {% endfor %}
-</table>
+</table></div>
 {% endblock %}

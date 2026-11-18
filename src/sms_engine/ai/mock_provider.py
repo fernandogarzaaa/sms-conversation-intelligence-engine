@@ -225,7 +225,6 @@ class MockProvider(LLMProvider):
         # "happy to" / "glad to" is an offer framing, not praise of the job
         praise_hits = [p for p in pos_hits if not re.search(rf"\b{re.escape(p)}\s+to\b", t_np, re.I)]
         has_pos = (bool(praise_hits) or pos_idiom or resolved) and not greeting_only
-        has_offer_pos = bool(pos_hits)  # weaker: enough to co-occur with REFERRAL etc.
         has_neg = bool(STRONG_NEGATIVE.search(t))
         has_contrast = bool(CONTRAST.search(t))
         has_issue = bool(ISSUE_MARKERS.search(t)) or bool(HAZARD.search(t) and SERVICE_WORD.search(t))
@@ -241,21 +240,16 @@ class MockProvider(LLMProvider):
             has_issue = False
 
         injected = bool(PROMPT_INJECTION.search(t))
-        hard_signal = False  # a signal that should suppress the weak QUESTION fallback
 
         if greeting_only:
             add("UNRELATED", 0.6, "greeting / smalltalk only")
-            hard_signal = True
 
         if OPTOUT.search(t):
             add("STOP_OPTOUT", 0.98, "matched opt-out phrase")
-            hard_signal = True
         if WRONG_NUMBER.search(t):
             add("WRONG_NUMBER", 0.9, "matched wrong-number phrase")
-            hard_signal = True
         if (IDENTITY.search(t) or NAME_NOT_NAME.search(t)) and not WRONG_NUMBER.search(t):
             add("IDENTITY_CORRECTION", 0.95, "customer stated a name correction")
-            hard_signal = True
         ends_q = t.rstrip().endswith("?")
         q_lead = bool(QUESTION_LEAD.search(t))
         strong_q = bool(STRONG_Q_LEAD.search(t))
@@ -273,36 +267,26 @@ class MockProvider(LLMProvider):
 
         if has_neg and not has_pos:
             add("NEGATIVE", 0.92, "strong negative language, no positive markers")
-            hard_signal = True
         if has_neg and has_pos and not has_contrast:
             add("MIXED_SENTIMENT", 0.8, "contradictory positive and negative statements")
-            hard_signal = True
         if has_issue and not (has_neg and not has_pos):
             add("OPEN_ISSUE", 0.93, "unresolved-work markers present")
-            hard_signal = True
         if has_pos and (has_contrast or has_issue) and not has_neg:
             add("MIXED_SENTIMENT", 0.96, "positive sentiment alongside a contrast/issue")
-            hard_signal = True
         if has_pos and not has_contrast and not has_issue and not has_neg:
             add("PURE_POSITIVE", 0.96, "positive markers, no contrast/issue/negation")
-            hard_signal = True
         if is_question:
             add("QUESTION", 0.9, "interrogative form")
         if REFERRAL.search(t) or INLINE_REFERRAL.search(t):
             add("REFERRAL_INTENT", 0.9, "explicit intent to recommend/refer")
-            hard_signal = True
         if INLINE_REFERRAL.search(t):
             add("INLINE_REFERRAL", 0.82, "a concrete referral appears in the message")
-            hard_signal = True
         if REPEAT_BUSINESS.search(t):
             add("REPEAT_BUSINESS_INTENT", 0.85, "intent to use the service again")
-            hard_signal = True
         if FUTURE.search(t) and (RELATION.search(t) or SERVICE_WORD.search(t)) and not INLINE_REFERRAL.search(t):
             add("VOLUNTEERED_FUTURE_INTENT", 0.85, "future service need volunteered")
-            hard_signal = True
         if DEFERRAL.search(t) and not has_pos and not has_issue and "VOLUNTEERED_FUTURE_INTENT" not in {i["type"] for i in intents}:
             add("DEFERRAL", 0.78, "asked to be contacted later")
-            hard_signal = True
 
         if injected:
             add("UNRELATED", 0.7, "off-topic instruction / injection content present")
@@ -454,12 +438,15 @@ class MockProvider(LLMProvider):
             target = ent.get("sentiment_positive_target") or "crew"
             if target and not target.startswith(("the ", "your ", "our ")):
                 target = "the " + target
-            g = greet.capitalize() if greet else ""
+            # the identity sentence already used the name; don't repeat it
+            g = "" if "confirm_identity" in actions else (greet.capitalize() if greet else "")
             if "PURE_POSITIVE" in intents:
                 parts.append(f"{g}glad {target} took care of everything." if g
                              else f"Glad {target} took care of everything.")
             elif "OPEN_ISSUE" in intents or "MIXED_SENTIMENT" in intents:
-                issue = _clean_issue(ent.get("issue") or "the issue you mentioned")
+                loc = (ent.get("issue_location") or "").strip()
+                issue = (f"the {loc}" if loc and not loc.lower().startswith("the ") else loc) if loc else \
+                    _clean_issue(ent.get("issue") or "the issue you mentioned")
                 parts.append(
                     f"{g}thanks for the kind words about {target}. "
                     f"I've flagged {issue} for the team to sort out." if g

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Dashboard · the SMS Engine{% endblock %}
+{% block title %}Dashboard · SMS Engine{% endblock %}
 {% block body %}
 <h1>Dashboard</h1>
 
@@ -18,22 +18,23 @@
 {% endif %}
 
 <h2>Review queue ({{ queue|length }})</h2>
-<table class="rowlink">
+<div class="tablewrap"><table class="rowlink">
   <tr><th>Risk</th><th>Contact</th><th>Message</th><th>Recommended</th><th></th></tr>
-  {% for r in queue %}
+  {% for r in queue[:10] %}
   <tr data-href="/ui/reviews/{{ r.id }}">
     <td><span class="pill {{ 'bad' if r.risk_level in ['HIGH','CRITICAL'] else 'warn' }}">{{ r.risk_level }}</span></td>
     <td class="mono">{{ r.contact_id }}</td>
-    <td>{{ r.customer_message }}</td>
+    <td>{% if r.kind and r.kind != 'REPLY' %}<span class="pill">{{ r.kind|lower }}</span> {{ r.generated_response }}{% else %}{{ r.customer_message }}{% endif %}</td>
     <td class="route-{{ r.recommended_action }}">{{ r.recommended_action }}</td>
     <td><a class="btn" href="/ui/reviews/{{ r.id }}">Review</a></td>
   </tr>
   {% endfor %}
   {% if not queue %}<tr><td colspan="5" class="small">Queue empty.</td></tr>{% endif %}
-</table>
+</table></div>
+{% if queue|length > 10 %}<p class="small"><a href="/ui/inbox">See all {{ queue|length }} in the inbox →</a></p>{% endif %}
 
 <h2>Conversations</h2>
-<table>
+<div class="tablewrap"><table>
   <tr><th>Contact</th><th>Name</th><th>Msgs</th><th>Open issues</th><th>Suppression</th><th>Last routing</th><th></th></tr>
   {% for c in conversations %}
   <tr>
@@ -45,18 +46,22 @@
     <td class="route-{{ c.last_routing }}">{{ c.last_routing or "—" }}</td>
     <td><a class="btn" href="/ui/conversations/{{ c.id }}">Open</a></td>
   </tr>
+  {% else %}<tr><td colspan="7" class="small">No conversations yet. Simulate one below.</td></tr>
   {% endfor %}
-</table>
+</table></div>
 
 <h2>Simulate an inbound SMS</h2>
 <form class="inline" method="post" action="/ui/simulate">
-  <input type="text" name="contact_id" placeholder="contact_id" value="demo_contact" required>
-  <input type="text" name="text" placeholder="customer message" size="52" required>
-  <input type="text" name="neighborhood" placeholder="neighborhood (optional)">
-  <button type="submit">Send</button>
+  <label for="sim-contact">Contact</label>
+  <input type="text" id="sim-contact" name="contact_id" placeholder="contact_id" value="demo_contact" required maxlength="128">
+  <label for="sim-text">Message</label>
+  <input type="text" id="sim-text" name="text" placeholder="e.g. The crew was great but they left a box in the garage" size="52" required maxlength="2000">
+  <input type="text" name="neighborhood" placeholder="neighborhood (optional)" aria-label="Neighborhood" maxlength="128">
+  <button type="submit">Process message</button>
 </form>
 <form class="inline" method="post" action="/ui/process-due" style="margin-top:10px">
-  <button class="ghost" type="submit">Process due send-queue</button>
+  <button class="ghost" type="submit">Run worker pass</button>
+  <span class="small">Sends due replies through the <span class="mono">{{ metrics.transport }}</span> transport and drafts due follow-ups.</span>
 </form>
 
 <h2>Operational metrics</h2>
@@ -71,15 +76,27 @@
   <div class="card"><div class="n">{{ metrics.avg_pipeline_latency_ms|round2 }} ms</div><div class="l">Avg pipeline latency</div></div>
   <div class="card"><div class="n">{{ metrics.responses_invalidated }}</div><div class="l">Responses invalidated</div></div>
   <div class="card"><div class="n">{{ metrics.followups_scheduled }}</div><div class="l">Follow-ups scheduled</div></div>
+  <div class="card"><div class="n">{{ metrics.reviews_superseded }}</div><div class="l">Reviews superseded</div></div>
+  <div class="card"><div class="n">{{ metrics.campaigns_allowed }} / {{ metrics.campaigns_triggered }}</div><div class="l">Campaign steps allowed</div></div>
+  <div class="card"><div class="n">{{ metrics.outbound_failed }}</div><div class="l">Sends failed</div></div>
+  <div class="card"><div class="n">{{ metrics.processing_failures }}</div><div class="l">Analyses failed safe</div></div>
 </div>
 
+{% if metrics.campaign_block_reasons %}
+<h2>Why campaign steps were blocked</h2>
+<div class="tablewrap"><table>
+  <tr><th>Reason</th><th>Count</th></tr>
+  {% for k, val in metrics.campaign_block_reasons.items() %}<tr><td>{{ k }}</td><td class="num">{{ val }}</td></tr>{% endfor %}
+</table></div>
+{% endif %}
+
 <h2>Routing breakdown</h2>
-<table>
+<div class="tablewrap"><table>
   <tr><th>Routing</th><th>Count</th></tr>
   {% for k, val in metrics.routing_breakdown.items() %}
-  <tr><td class="route-{{k}}">{{ k }}</td><td>{{ val }}</td></tr>
+  <tr><td class="route-{{k}}">{{ k }}</td><td class="num">{{ val }}</td></tr>
   {% endfor %}
-</table>
+</table></div>
 
 <h2>Classifier evaluation (synthetic dataset, n={{ classifier.n }}, model={{ classifier.model }})</h2>
 <div class="grid cards">
@@ -87,15 +104,15 @@
   <div class="card"><div class="n">{{ classifier.salient_recall|pct }}</div><div class="l">Salient recall</div></div>
   <div class="card"><div class="n">{{ classifier.macro_f1|round2 }}</div><div class="l">Macro F1</div></div>
 </div>
-<table>
+<div class="tablewrap"><table>
   <tr><th>Intent</th><th>Support</th><th>Precision</th><th>Recall</th><th>F1</th></tr>
   {% for name, s in classifier.per_intent.items() %}
-  <tr><td class="mono">{{ name }}</td><td>{{ s.support }}</td><td>{{ s.precision }}</td><td>{{ s.recall }}</td><td>{{ s.f1 }}</td></tr>
+  <tr><td class="mono">{{ name }}</td><td class="num">{{ s.support }}</td><td class="num">{{ s.precision }}</td><td class="num">{{ s.recall }}</td><td class="num">{{ s.f1 }}</td></tr>
   {% endfor %}
-</table>
+</table></div>
 
 <h2>Automation eligibility (learning loop)</h2>
-<table>
+<div class="tablewrap"><table>
   <tr><th>Intent</th><th>Sample</th><th>Approved (no edit)</th><th>Approval rate</th><th>Enabled</th><th>Recommendation</th></tr>
   {% for e in eligibility %}
   <tr>
@@ -107,6 +124,7 @@
     <td class="small">{{ e.recommendation }}</td>
   </tr>
   {% endfor %}
-  {% if not eligibility %}<tr><td colspan="6" class="small">No decided reviews yet — decide some in the inbox to populate this.</td></tr>{% endif %}
-</table>
+  {% if not eligibility %}<tr><td colspan="6" class="small">No decided reviews yet. Decide some in the inbox to populate this.</td></tr>{% endif %}
+</table></div>
+<p class="small">Eligibility is a recommendation. Turning on automatic send for an intent is a deliberate change to the automation config.</p>
 {% endblock %}

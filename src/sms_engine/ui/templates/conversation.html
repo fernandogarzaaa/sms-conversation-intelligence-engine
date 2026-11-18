@@ -1,9 +1,13 @@
 {% extends "base.html" %}
-{% block title %}Conversation · the SMS Engine{% endblock %}
+{% block title %}Conversation · SMS Engine{% endblock %}
 {% block body %}
-<h1>Conversation — <span class="mono">{{ v.conversation.contact_id }}</span>
+{% set opted_out = state.suppression.reason == 'OPT_OUT' or state.campaign_status == 'OPTED_OUT' %}
+<h1>
+  <span>Conversation · <span class="mono">{{ v.conversation.contact_id }}</span></span>
   {% if state.identity.name %}<span class="pill accent">{{ state.identity.name }}</span>{% endif %}
-  {% if state.suppression.active %}<span class="pill bad">suppressed: {{ state.suppression.reason }}</span>{% endif %}
+  {% if opted_out %}<span class="pill bad">opted out</span>
+  {% elif state.suppression.active %}<span class="pill bad">suppressed: {{ state.suppression.reason }}</span>{% endif %}
+  {% if open_review_id %}<a class="btn" href="/ui/reviews/{{ open_review_id }}" style="margin-left:auto">Open review →</a>{% endif %}
 </h1>
 
 <div class="two">
@@ -11,86 +15,128 @@
     <h2>Thread</h2>
     <div class="thread">
       {% for m in v.messages %}
-        <div class="msg {{ 'IN' if m.direction == 'INBOUND' else 'OUT' }}">
+        <div class="msg {{ 'IN' if m.direction.value == 'INBOUND' else 'OUT' }}">
           {{ m.raw_text }}
-          <div class="t">{{ m.direction }} · {{ m.created_at }}{% if m.variant_id %} · {{ m.variant_id }}{% endif %}</div>
+          <div class="t">{{ 'Customer' if m.direction.value == 'INBOUND' else 'Sent' }} · {{ m.created_at|ts }}{% if m.variant_id %} · {{ m.variant_id }}{% endif %}{% if m.meta and m.meta.transport %} · via {{ m.meta.transport }}{% endif %}</div>
         </div>
-      {% endfor %}
+      {% else %}<p class="small">No messages yet.</p>{% endfor %}
     </div>
 
-    <h2>Latest decision trace</h2>
-    {% if trace %}<div class="trace mono">{{ trace.rendered }}</div>{% else %}<p class="small">No trace.</p>{% endif %}
-
-    <h2>Event log</h2>
-    <table>
-      <tr><th>#</th><th>Type</th><th>At</th><th>Payload</th></tr>
-      {% for e in v.events %}
-      <tr><td>{{ e.seq }}</td><td class="mono">{{ e.type }}</td><td class="small">{{ e.created_at }}</td>
-      <td class="small mono">{{ e.payload }}</td></tr>
+    {% set pending = v.planned|selectattr('status', 'in', ['PLANNED', 'PENDING_REVIEW', 'SENDING'])|list %}
+    {% if pending %}
+    <h2>Waiting to send</h2>
+    <div class="tablewrap"><table>
+      <tr><th>Kind</th><th>Text</th><th>Status</th><th>Send after (UTC)</th></tr>
+      {% for p in pending %}
+      <tr><td class="small">{{ p.kind|lower }}</td><td>{{ p.text }}</td><td class="mono small">{{ p.status }}</td><td class="mono small">{{ p.send_after|ts }}</td></tr>
       {% endfor %}
-    </table>
+    </table></div>
+    {% endif %}
+
+    <details>
+      <summary>Latest decision trace</summary>
+      {% if trace %}<div class="trace mono">{{ trace.rendered }}</div>{% else %}<p class="small">No trace yet.</p>{% endif %}
+    </details>
+
+    <details>
+      <summary>Event log ({{ v.events|length }})</summary>
+      <div class="tablewrap"><table>
+        <tr><th>#</th><th>Type</th><th>At</th><th>Payload</th></tr>
+        {% for e in v.events %}
+        <tr><td class="num">{{ e.seq }}</td><td class="mono">{{ e.type }}</td><td class="small">{{ e.created_at|ts }}</td>
+        <td class="small mono" style="overflow-wrap:anywhere">{{ e.payload }}</td></tr>
+        {% endfor %}
+      </table></div>
+    </details>
+
+    <details>
+      <summary>Outbound history ({{ v.planned|length }})</summary>
+      <div class="tablewrap"><table>
+        <tr><th>Kind</th><th>Status</th><th>Model</th><th>Text</th><th>Error</th></tr>
+        {% for p in v.planned %}
+        <tr><td class="small">{{ p.kind|lower }}</td><td class="mono small">{{ p.status }}</td><td class="mono small">{{ p.model_used }}</td>
+        <td class="small">{{ p.text }}</td><td class="small">{{ p.last_error or "" }}</td></tr>
+        {% else %}<tr><td colspan="5" class="small">Nothing planned yet.</td></tr>{% endfor %}
+      </table></div>
+    </details>
   </div>
 
   <div>
     <h2>State</h2>
     <div class="kv">
-      <div>identity</div><div class="mono">{{ state.identity.name or "—" }}{% if state.identity.previous_name %} (was {{ state.identity.previous_name }}){% endif %}</div>
-      <div>verified</div><div class="mono">{{ state.identity.verified }}</div>
-      <div>referral status</div><div class="mono">{{ state.referral_status }}</div>
-      <div>campaign status</div><div class="mono">{{ state.campaign_status }}</div>
-      <div>event version</div><div class="mono">{{ state.version }}</div>
-      <div>links sent</div><div class="mono">{{ state.links_sent|join(', ') or "—" }}</div>
+      <div>Name</div><div>{{ state.identity.name or "—" }}{% if state.identity.previous_name %} <span class="small">(was {{ state.identity.previous_name }})</span>{% endif %}{% if state.identity.verified %} <span class="pill good">confirmed</span>{% endif %}</div>
+      <div>Phone</div><div class="mono">{{ v.conversation.phone or "—" }}</div>
+      <div>Referral</div><div class="mono">{{ state.referral_status }}</div>
+      <div>Campaign</div><div class="mono">{{ state.campaign_status }}</div>
+      <div>Already sent</div><div class="mono">{{ state.offers_presented|map(attribute='kind')|list|join(', ') or "—" }}</div>
+      <div>Links sent</div><div class="mono small">{{ state.links_sent|join(', ') or "—" }}</div>
+      <div>Event version</div><div class="mono">{{ state.version }}</div>
     </div>
 
-    <h2>Open issues</h2>
+    <h2>Issues</h2>
     {% for i in state.open_issues %}
-      <div class="card" style="margin-bottom:6px">
+      <div class="card" style="margin-bottom:8px">
         <div>{{ i.description }}</div>
-        <div class="small">{{ "resolved" if i.resolved else "OPEN" }} · {{ i.opened_at }}</div>
+        <div class="small">{{ "Resolved " ~ (i.resolved_at|ts) if i.resolved else "OPEN since " ~ (i.opened_at|ts) }}{% if i.resolution_note %} · {{ i.resolution_note }}{% endif %}</div>
+        {% if not i.resolved %}
+        <form class="inline" method="post" action="/ui/conversations/{{ v.conversation.id }}/issues/{{ i.id }}/resolve" style="margin-top:8px">
+          <input type="text" name="note" placeholder="How was it resolved?" aria-label="Resolution note" maxlength="500">
+          {% if state.suppression.active and state.suppression.reason == 'OPEN_ISSUE' %}
+          <label><input type="checkbox" name="release" value="1"> also release suppression</label>
+          {% endif %}
+          <button class="ghost" type="submit">Mark resolved</button>
+        </form>
+        {% endif %}
       </div>
     {% else %}<p class="small">None.</p>{% endfor %}
 
-    <h2>Facts (with provenance)</h2>
-    <table>
-      <tr><th>Key</th><th>Value</th><th>Conf.</th><th>Source</th></tr>
-      {% for f in state.facts %}
-      <tr><td class="mono">{{ f.key }}</td><td>{{ f.value }}</td><td>{{ f.confidence }}</td><td class="mono small">{{ f.source_message_id }}</td></tr>
-      {% else %}<tr><td colspan="4" class="small">None.</td></tr>{% endfor %}
-    </table>
+    <h2>Campaign steps</h2>
+    <p class="small" style="margin-top:0">The engine checks suppression, open issues, and what was already sent before anything is queued.
+      A customer who already offered to refer gets their own link, not the pitch.</p>
+    <form class="inline" method="post" action="/ui/conversations/{{ v.conversation.id }}/campaigns">
+      <button name="kind" value="review_request" class="ghost" type="submit" {{ 'disabled' if opted_out }}>Request review</button>
+      <button name="kind" value="referral_ask" class="ghost" type="submit" {{ 'disabled' if opted_out }}>Referral ask</button>
+      <button name="kind" value="referral_link" class="ghost" type="submit" {{ 'disabled' if opted_out }}>Send referral link</button>
+    </form>
 
-    <h2>Future intents / follow-ups</h2>
+    <h2>Facts (with provenance)</h2>
+    <div class="tablewrap"><table>
+      <tr><th>Key</th><th>Value</th><th>Conf.</th></tr>
+      {% for f in state.facts[-12:] %}
+      <tr><td class="mono small">{{ f.key }}</td><td>{{ f.value }}</td><td class="num">{{ '%.2f'|format(f.confidence) }}</td></tr>
+      {% else %}<tr><td colspan="3" class="small">None.</td></tr>{% endfor %}
+    </table></div>
+
+    <h2>Future needs and follow-ups</h2>
     {% for f in state.future_intents %}
       <div class="card" style="margin-bottom:6px">{{ f.description }}
-        <div class="small">who={{ f.who }} when={{ f.when_text }}</div></div>
+        <div class="small">who={{ f.who or "—" }} · when={{ f.when_text or "—" }}</div></div>
     {% else %}<p class="small">None.</p>{% endfor %}
     {% for f in v.followups %}
-      <div class="small mono">follow-up {{ f.id }} due {{ f.due_at }} — {{ f.reason }}</div>
+      <div class="small">Follow-up due {{ f.due_at|ts }} · <span class="mono">{{ f.status }}</span></div>
     {% endfor %}
 
     <h2>Manual controls</h2>
-    {% set opted_out = state.suppression.reason == 'OPT_OUT' or state.campaign_status == 'OPTED_OUT' %}
     {% if state.suppression.active %}
       <div class="statebar">
         <span class="pill bad">SUPPRESSED</span>
-        <span class="small">Already suppressed
-          {%- if state.suppression.reason %} — reason {{ state.suppression.reason }}{% endif %}
-          {%- if state.suppression.since %}, since {{ state.suppression.since }}{% endif %}.
-          No further outbound campaign messages will be sent.</span>
+        <span class="small">Reason {{ state.suppression.reason }}{% if state.suppression.since %}, since {{ state.suppression.since|ts }}{% endif %}.
+          No campaign messages will be sent.</span>
       </div>
-      <button class="bad" type="button" disabled aria-disabled="true"
-              title="This conversation is already suppressed">Suppress</button>
       {% if opted_out %}
-        <p class="small" style="margin-top:8px">Contact opted out — suppression cannot be released.</p>
+        <p class="small">The contact opted out. This can never be released.</p>
       {% else %}
-        <form class="inline" method="post" action="/ui/conversations/{{ v.conversation.id }}/release" style="margin-top:8px">
-          <input type="text" name="note" placeholder="note"><button class="ghost" type="submit">Release suppression</button>
+        <form class="inline" method="post" action="/ui/conversations/{{ v.conversation.id }}/release">
+          <input type="text" name="note" placeholder="note" aria-label="Release note" maxlength="500">
+          <button class="ghost" type="submit">Release suppression</button>
         </form>
       {% endif %}
     {% else %}
       <form class="inline" method="post" action="/ui/conversations/{{ v.conversation.id }}/suppress">
-        <input type="text" name="note" placeholder="reason"><button class="bad" type="submit">Suppress</button>
+        <input type="text" name="note" placeholder="reason" aria-label="Suppression reason" maxlength="500">
+        <button class="bad" type="submit">Suppress</button>
       </form>
-      <p class="small" style="margin-top:6px">Not suppressed — campaign messaging is active for this contact.</p>
+      <p class="small" style="margin-top:6px">Not suppressed. Campaign messages are allowed for this contact.</p>
     {% endif %}
   </div>
 </div>

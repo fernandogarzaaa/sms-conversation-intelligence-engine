@@ -43,7 +43,7 @@ def compute_eligibility(
         FROM reviews r
         JOIN traces t
           ON t.conversation_id = r.conversation_id AND t.message_id = r.message_id
-        WHERE r.status = 'DECIDED'
+        WHERE r.status = 'DECIDED' AND COALESCE(r.kind, 'REPLY') = 'REPLY'
         """
     ).fetchall()
 

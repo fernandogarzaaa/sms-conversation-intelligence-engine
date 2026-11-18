@@ -2,12 +2,7 @@
 
 from __future__ import annotations
 
-import warnings
-
 import pytest
-
-warnings.filterwarnings("ignore")
-
 from fastapi.testclient import TestClient
 
 from sms_engine.api.app import create_app

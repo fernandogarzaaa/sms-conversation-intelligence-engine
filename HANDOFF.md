@@ -1,7 +1,7 @@
 # Technical Handoff — SMS Conversation Intelligence Engine
 
 **Audience:** the engineering team.
-**Status:** working prototype of the **intelligence / application layer**. Commit `f44eaaf`, branch `build/sms-conversation-engine`. 93 tests passing.
+**Status:** v0.2.0 — the intelligence / application layer plus the integration seams (real model providers, Twilio transport and webhook, auth, worker). 230 tests passing. See [CHANGELOG.md](CHANGELOG.md) for what changed from the v0.1 prototype.
 **Read first:** [ARCHITECTURE.md](ARCHITECTURE.md), [DECISIONS.md](DECISIONS.md), [SECURITY.md](SECURITY.md), [EVALUATION.md](EVALUATION.md), [DEMO.md](DEMO.md).
 
 > ### The one thing to be clear about
@@ -11,13 +11,14 @@
 > constrained response generation, deterministic validation, human review, and
 > the evaluation/learning loop.**
 >
-> It **does not** integrate any real business infrastructure. There is **no SMS
-> provider connection, no CRM connection, no hookup to the existing
-> campaign/timer system, no production datastore, and no LLM** — the model layer
-> is a deterministic rule-based `MockProvider` behind an `LLMProvider`
-> interface. "Inbound SMS" is an HTTP call; "outbound SMS" is a row written to
-> SQLite. Section 19 is the explicit prototype/production boundary. Section 20 is
-> the integration path.
+> Since v0.2 it **can** connect to real infrastructure, but nothing is connected
+> by default: the default model is the deterministic rule-based `MockProvider`,
+> the default SMS transport is `log` (nothing leaves the machine), and auth is
+> off until keys are set. Real model providers (OpenAI, OpenRouter, local,
+> Anthropic) and a Twilio transport + signed inbound webhook are implemented
+> behind configuration. There is still **no CRM connection, no hookup to the
+> existing campaign/timer system, and no production datastore** (SQLite).
+> Section 19 is the explicit boundary. Section 20 is the integration path.
 
 ---
 
@@ -162,7 +163,8 @@ each other — the pipeline in `application` wires them. ~5,600 LOC in `src/`.
 | Entity extractor | `ai/extractor.py` | ✅ |
 | `LLMProvider` abstraction | `ai/provider.py` | ✅ interface |
 | `MockProvider` (deterministic rule engine) | `ai/mock_provider.py` | ✅ — **stands in for the LLM** |
-| `OpenAIProvider` / `LocalProvider` | `ai/provider.py` | ⚠️ **interface stubs — raise `NotImplementedError`** |
+| `OpenAIProvider` / `OpenRouterProvider` / `LocalProvider` / `AnthropicProvider` | `ai/llm.py`, `ai/factory.py` | ✅ real HTTP providers, selected by `SMS_ENGINE_PROVIDER` (default: mock) |
+| Deterministic opt-out backstop + rules fallback on model outage | `policy/optout.py`, `ai/classifier.py` | ✅ |
 | Client context-pack ingestion | `context/ingestion.py` | ✅ |
 | Context retrieval + grounded-FAQ gate | `context/retrieval.py` | ✅ (keyword overlap, not embeddings) |
 | Constrained response generator | `ai/generator.py` + `mock_provider.generate_reply` | ✅ |
@@ -174,11 +176,16 @@ each other — the pipeline in `application` wires them. ~5,600 LOC in `src/`.
 | Human review service (decision → eval data) | `application/review_service.py` | ✅ |
 | Evaluation: classifier scoring, operational metrics, automation-eligibility | `eval/` | ✅ |
 | Decision trace (full observability record) | `domain/trace.py`, assembled in pipeline | ✅ |
-| HTTP API (FastAPI) | `api/` | ✅ dev server, **no auth** |
-| Human-review dashboard (Jinja2) | `ui/` | ✅ deliberately minimal |
+| HTTP API (FastAPI) | `api/` | ✅ API-key auth when `SMS_ENGINE_API_KEYS` is set |
+| Twilio inbound webhook (signature + idempotency) | `api/app.py` | ✅ |
+| Human-review dashboard (Jinja2) | `ui/` | ✅ Basic auth, same-origin POSTs, live validation |
+| Campaign gate + campaign service (review request / referral ask / referral link) | `policy/engine.py::campaign_check`, `application/campaigns.py` | ✅ |
+| Follow-up processing (due → human-gated review) | `application/followups.py` | ✅ |
+| Send worker (state + quiet-hours guards, retries) + SMS transports | `application/send_worker.py`, `infrastructure/transport.py` | ✅ `log` (default), `twilio` |
+| Background worker / CLI | `application/worker.py`, `cli.py` | ✅ |
 | Seed dataset (125 labelled synthetic inbound messages) | `data/seed/` | ✅ **synthetic, clearly marked** |
 | Demo runner (scenarios A–G + traces) | `scripts/demo.py` | ✅ |
-| Persistence | SQLite (`infrastructure/db.py`) | ⚠️ **single file, single shared connection** |
+| Persistence | SQLite (`infrastructure/db.py`) | ✅ thread-safe, transactional, migrated — ⚠️ one server process (Postgres for more) |
 
 ## 7. Conversation state model
 
@@ -235,8 +242,8 @@ de-duplicated, sorted by confidence. The provider is swappable
 ```
 LLMProvider (ABC)
 ├── MockProvider     deterministic keyword/regex rules — used by all tests + the demo
-├── OpenAIProvider   interface-only stub (NotImplementedError)
-└── LocalProvider    interface-only stub — for a future cloud-vs-local comparison
+├── OpenAI / OpenRouter / Local (OpenAI-compatible)   real HTTP providers
+└── AnthropicProvider                                  real HTTP provider
 ```
 
 `MockProvider` is a **transparent rule engine**, not an LLM. Against the 125-row
@@ -345,7 +352,9 @@ deterministic under a seeded `Rng` (`Rng.derived(salt)` per message):
 
 - complexity buckets: `fast` (short question) / `short` / `medium` / `complex`
   → base delay 35 s … 25 min
-- night (local ≥ 21:00 or < 07:00) → held to a `07:15–09:45` morning window
+- outside the send window (default 08:15–20:30 in the client's IANA timezone,
+  DST-correct, TCPA-safe) → held to the next morning, spread over 150 minutes;
+  re-checked by the send worker at send time
 - jitter; never lands on `:00` or `:30` or a whole minute; no two identical
   send timestamps (`_dedupe`)
 
@@ -416,7 +425,13 @@ final response, reviewer, notes, timestamps. That row is the input to §15.
 ## 16. API
 
 FastAPI (`api/app.py`). Thin handlers over `application/service.py::
-SmsEngineService`. **No authentication.**
+SmsEngineService`. API-key auth on every JSON route when `SMS_ENGINE_API_KEYS`
+is set; `/health` is open; the Twilio webhook is authenticated by its signature.
+The complete, current list is in the README (section 12) and at `/docs`; the v0.2
+additions are `POST /webhooks/twilio/sms`, `POST /jobs/completed`,
+`POST /conversations/{id}/campaigns`, `POST /conversations/{id}/issues/{issue_id}/resolve`,
+`POST /reviews/{id}/validate`, `POST /process-followups`, `POST /worker/run`,
+`GET /outbound`, `GET /config/automation`, `GET /metrics/prometheus`, `GET /clients/{id}`.
 
 | Method + path | Purpose |
 |---|---|
@@ -441,7 +456,13 @@ SmsEngineService`. **No authentication.**
 
 ## 17. Testing
 
-`python -m pytest` → **93 passed** (~1 s, fully offline & deterministic).
+`pytest` → **230 passed** (a few seconds, fully offline & deterministic). The v0.1
+suites below are unchanged; v0.2 adds `test_storage_and_safety.py` (migrations,
+transactions, concurrency, idempotency, fail-safe), `test_review_guards.py`,
+`test_campaigns_and_sending.py`, `test_model_independence.py`,
+`test_config_and_timing.py`, `test_worker_and_transport.py`,
+`test_llm_provider.py` (providers over mocked HTTP), `test_api_security_and_flows.py`
+(auth, webhook signatures, endpoints, every UI page), and `test_cli.py`.
 
 | Suite | File(s) | Covers |
 |---|---|---|
@@ -458,7 +479,12 @@ SmsEngineService`. **No authentication.**
 | api | `tests/test_api.py` | every §16 endpoint responds and is wired to the engine |
 | eval | `tests/test_eval.py` | dataset coverage + a classifier quality floor + the learning loop populates from decisions |
 
-## 18. EVE evaluation
+## 18. EVE evaluation (historical, v0.1)
+
+> The EVE runs and their `.eve-output/` directory belong to a separate tool and
+> are not in this repository. The v0.2 review page was rebuilt around the
+> finding below (decision first, plain-language reasons, collapsible detail,
+> live validation); it has not been re-scored with EVE.
 
 The human-review dashboard was run through **EVE** (Experience Validation
 Engine — separate repo `D:\experience-validation-engine`, plugin updated to
@@ -485,18 +511,18 @@ engineering legible. It does not affect the engine.
 
 | Concern | Prototype (this repo) | Production needs |
 |---|---|---|
-| **Inbound SMS** | `POST /messages/inbound` called by a test / the demo script / curl | An **Event Adapter** behind the real SMS provider's inbound webhook (Twilio / Bandwidth / Telnyx / …), verifying the provider signature and de-duplicating on the provider message SID |
-| **Outbound SMS** | `process_due` writes an `OUTBOUND` row to SQLite and emits `RESPONSE_SENT`. **Nothing leaves the machine.** | `process_due` calls the provider send API; on the provider's delivery receipt, emit `RESPONSE_SENT`; handle ret/failure/STOP callbacks |
-| **Campaign / job events** | none — you `POST /events` by hand | the existing campaign/timer system emits `JOB_COMPLETED` / `CAMPAIGN_TRIGGERED` into `POST /events` |
+| **Inbound SMS** | `POST /messages/inbound`, or the Twilio webhook `POST /webhooks/twilio/sms` (signature-verified, idempotent on `MessageSid`) | An **Event Adapter** behind the real SMS provider's inbound webhook (Twilio / Bandwidth / Telnyx / …), verifying the provider signature and de-duplicating on the provider message SID |
+| **Outbound SMS** | The send worker calls an `SmsTransport`: `log` (default, nothing leaves the machine) or `twilio`; retries with backoff; `RESPONSE_SENT` on acceptance. Delivery-status callbacks are not consumed yet. | `process_due` calls the provider send API; on the provider's delivery receipt, emit `RESPONSE_SENT`; handle ret/failure/STOP callbacks |
+| **Campaign / job events** | `POST /jobs/completed` and `POST /conversations/{id}/campaigns` (or `CAMPAIGN_TRIGGERED` events) exist and are gated by the engine; the existing timer system is not wired to call them yet | the existing campaign/timer system emits `JOB_COMPLETED` / `CAMPAIGN_TRIGGERED` into `POST /events` |
 | **CRM** | none | Read customer/job context in; write identity corrections, opt-outs, referral status, and future-intent follow-ups back out |
-| **Model** | `MockProvider` — a deterministic **rule engine**, not an LLM. `OpenAIProvider` / `LocalProvider` are stubs that raise `NotImplementedError` | Implement one `LLMProvider` (cloud and/or local); shadow-run against `MockProvider`; compare with the eval harness before it can send |
-| **Persistence** | one SQLite file, one shared connection (`check_same_thread=False`) | Postgres (or similar). Repositories are the only touch points; the event store needs a real unique constraint on `(conversation_id, seq)` and row-level locking on append |
-| **Auth** | none on the API or the dashboard | SSO on the API + review UI; signed API keys for the Event Adapter; per-client tenancy checks |
-| **Concurrency** | single-process, serialized; `Clock` / `Rng` injected for determinism | Multiple workers; the append path must serialize per conversation; `process_due` becomes a locked/leased job |
+| **Model** | Default `MockProvider` (rules). Real providers implemented and live-evaluated (`docs/LLM_EVAL_RESULTS.md`); rules fallback + forced review on outage | Implement one `LLMProvider` (cloud and/or local); shadow-run against `MockProvider`; compare with the eval harness before it can send |
+| **Persistence** | one SQLite file; thread-safe connection, transactions, migrations, `(conversation_id, seq)` unique | Postgres (or similar). Repositories are the only touch points; the event store needs a real unique constraint on `(conversation_id, seq)` and row-level locking on append |
+| **Auth** | API keys on the API, HTTP Basic on the dashboard, Twilio signatures on the webhook; no per-client tenancy | SSO on the API + review UI; signed API keys for the Event Adapter; per-client tenancy checks |
+| **Concurrency** | one process, serialized under a lock; the send worker claims before sending; `Clock` / `Rng` injected for determinism | Multiple workers; the append path must serialize per conversation; `process_due` becomes a locked/leased job |
 | **Retrieval** | keyword overlap over a ~5-item FAQ | Embedding/vector store behind `ContextRetriever` |
-| **Timing** | in-process, drained by calling `process_due` | A scheduler / queue (e.g. a delayed-job table drained by a worker, or the provider's own scheduled-send) |
-| **Review UI** | bundled Jinja dashboard, no auth | Behind SSO, or expose `/review-queue` + `/reviews/{id}/decision` to the existing ops tooling |
-| **Observability** | `DecisionTrace` in SQLite, `GET /metrics` | Ship traces to the logging/analytics; metrics to their dashboards; alerting on suppression/escalation rate |
+| **Timing** | background worker (in-process or `sms-engine worker`), quiet hours re-checked at send time | A scheduler / queue (e.g. a delayed-job table drained by a worker, or the provider's own scheduled-send) |
+| **Review UI** | bundled Jinja dashboard behind Basic auth | Behind SSO, or expose `/review-queue` + `/reviews/{id}/decision` to the existing ops tooling |
+| **Observability** | `DecisionTrace` in SQLite, `GET /metrics`, `GET /metrics/prometheus`, JSON logs (`SMS_ENGINE_LOG_JSON`) | Ship traces to the logging/analytics; metrics to their dashboards; alerting on suppression/escalation rate |
 | **Data** | 125 **synthetic** labelled messages, clearly marked; no real customer data | Real labelled review outcomes accumulate via §15; retention / PII handling per company policy |
 | **Compliance** | opt-out honored in-engine | Opt-out must also propagate to the provider suppression list **and** the CRM; TCPA/quiet-hours per jurisdiction |
 
@@ -528,7 +554,19 @@ SMS Provider  →  Event Adapter          inbound webhook → POST /messages/inb
                                         follow-up tasks, opt-out propagation
 ```
 
-### Boundary components to build (thin, around the engine)
+### Boundary components (status after v0.2)
+
+| # | Component | Status |
+|---|---|---|
+| 1 | Event Adapter (inbound) | ✅ for Twilio (`/webhooks/twilio/sms`); other providers follow the same 20-line pattern |
+| 2 | Campaign bridge | ✅ endpoints exist and gate every step; ⏳ the existing timer system must call them |
+| 3 | Send worker (outbound) | ✅ transport interface + Twilio; ⏳ delivery-status callbacks |
+| 4 | CRM sync | ⏳ not built |
+| 5 | `LLMProvider` implementation | ✅ OpenAI / OpenRouter / local / Anthropic |
+| 6 | Datastore swap | ⏳ SQLite → Postgres (repositories are the only SQL touch points) |
+| 7 | Auth + tenancy | ✅ auth; ⏳ per-client tenancy on keys |
+
+The original descriptions follow.
 
 1. **Event Adapter (inbound).** One service that terminates the SMS provider's
    inbound webhook, verifies the provider signature, maps the payload to
@@ -583,17 +621,16 @@ auto.
 ## Appendix — run it locally
 
 ```bash
-cd E:\sms_engine-sms
-py -m venv .venv
-.venv\Scripts\python.exe -m pip install -e ".[dev]"
+python -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\activate
+pip install -e ".[dev]"
 
-.venv\Scripts\python.exe -m pytest                    # 93 tests
-.venv\Scripts\python.exe scripts\demo.py              # scenarios A–G + decision traces
-.venv\Scripts\python.exe scripts\demo.py maya john   # just the two failure cases
+pytest                          # 230 tests
+sms-engine demo                 # scenarios A–G + decision traces
+sms-engine demo maya john       # just the two failure cases
 
-.venv\Scripts\python.exe scripts\demo.py --seed-db
-.venv\Scripts\python.exe -m uvicorn sms_engine.api.app:get_app --factory --port 8099
-#   → http://127.0.0.1:8099   (dashboard / inbox / review / conversation)
+sms-engine seed-db
+sms-engine serve                # → http://127.0.0.1:8099 (dashboard / inbox / review / conversation)
 ```
 
-No API keys, no network, no external services. Provider = `MockProvider`.
+No API keys, no network, no external services by default. Provider = `MockProvider`,
+transport = `log`. Production settings: `.env.example`; container: `docker compose up --build`.

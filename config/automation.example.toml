@@ -1,0 +1,44 @@
+# Automation config for the SMS Conversation Intelligence Engine.
+#
+# Copy to config/automation.toml (picked up automatically) or point
+# SMS_ENGINE_AUTOMATION_CONFIG at a file. Validate with:
+#
+#     sms-engine check-config config/automation.toml
+#
+# Turning on automatic send for an intent is a deliberate, reviewed change to
+# this file. The learning loop (GET /eval/automation-eligibility) recommends;
+# it never flips these switches itself.
+
+# Below this top-intent confidence, every message goes to a human.
+global_confidence_floor = 0.6
+
+# Escalate a contact once this many issues are open at the same time.
+escalate_on_open_issues = 2
+
+# Per-intent automatic send. An intent not listed here is never auto-sent.
+# Opt-out, negative sentiment, wrong number, open issues, and identity
+# corrections are always handled deterministically or by a human; they cannot
+# be enabled here.
+[intents.PURE_POSITIVE]
+enabled = true
+min_confidence = 0.90
+graduation_min_approval = 0.95   # approval rate (no edits) the learning loop requires...
+graduation_min_sample = 50       # ...over at least this many human decisions
+
+[intents.QUESTION]
+enabled = true                   # only ever auto-answers from an APPROVED FAQ entry
+min_confidence = 0.80
+graduation_min_approval = 0.95
+graduation_min_sample = 50
+
+[campaigns]
+enabled = true
+# true = every review request / referral message waits in the review queue
+require_review = false
+
+[sending]
+max_attempts = 3                 # transport retries before a send is marked FAILED
+retry_backoff_seconds = 300      # doubled after each failed attempt
+
+[followups]
+delay_days = 30                  # when a volunteered future need comes back for review

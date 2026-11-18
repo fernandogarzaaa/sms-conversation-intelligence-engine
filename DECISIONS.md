@@ -18,20 +18,21 @@ silently change whether `STOP` suppresses globally.
 **Trade-off.** The rule engine needs maintenance as new intent patterns appear.
 Accepted: rules are cheap to read, test, and diff; a wrong rule is visible.
 
-## D2 — Deterministic MockProvider as the only provider in this build
+## D2 — Deterministic MockProvider as the default provider
 
 **Decision.** `MockProvider` is a transparent keyword/regex classifier +
-template generator. `OpenAIProvider` / `LocalProvider` exist only as interface
-stubs that raise `NotImplementedError`.
+template generator and remains the default. Since v0.2, real providers
+(OpenAI, OpenRouter, local OpenAI-compatible servers, Anthropic) implement the
+same `LLMProvider` interface and are selected with `SMS_ENGINE_PROVIDER`.
 
-**Why.** The deliverable is the *system*. A deterministic provider makes the
+**Why.** The deliverable is the *system*. A deterministic default makes the
 whole pipeline testable end-to-end with no network, no keys, no flakiness, and
-lets the demo be reproducible. The `LLMProvider` seam is the real artifact — a
-production model drops in without changing state/policy/validation/review.
+keeps the demo reproducible. Swapping in a real model changed no state, policy,
+validation, or review code — which is the claim the seam was built to prove.
 
-**Trade-off.** The classifier's language understanding is shallow (it will miss
-paraphrases outside its lexicons). Accepted for a prototype; the eval harness
-measures exactly this and a real model is a one-class change.
+**Trade-off.** The default classifier's language understanding is shallow.
+Accepted: `sms-engine eval` scores any provider on the same set, so moving to a
+real model is a measured decision (see `docs/LLM_EVAL_RESULTS.md`).
 
 ## D3 — Conversation state is a projection of an append-only event log
 
@@ -130,3 +131,97 @@ text still pass the full validator battery.
 exists to make the engineering legible — inbox, full thread, intents, entities,
 state, client context, risk, recommended action, generated response, and the
 decision trace, with Approve / Edit&Send / Reject / Suppress / Escalate.
+
+## D11 — Store the message first, analyse atomically, fail safe
+
+**Decision.** An inbound message is handled in two transactions under one lock:
+(1) store the message, append `SMS_RECEIVED`, invalidate stale replies, supersede
+stale reviews; (2) the whole analysis and decision. If (2) raises, it rolls back
+and a third transaction opens a HIGH-risk review with a `PROCESSING_FAILED` event.
+
+**Why.** Two properties matter more than anything else: a customer message is
+never lost, and a half-made decision is never acted on. One transaction for
+everything would lose the message on a crash; no transaction leaves partial events.
+
+**Trade-off.** A crash costs a human review instead of an automated reply. That
+is the intended direction of failure.
+
+## D12 — Idempotency on the provider message id
+
+**Decision.** `messages.provider_message_id` is unique. A repeated id returns the
+stored decision (rebuilt from the trace) and changes nothing.
+
+**Why.** SMS providers retry webhooks. Without this, a retry is a second inbound
+message: it invalidates the reply to itself and opens a duplicate review.
+
+## D13 — New inbound supersedes open reviews
+
+**Decision.** A new customer message closes every open review on the conversation
+(`SUPERSEDED`), the same way it invalidates queued replies. A superseded review
+cannot be decided.
+
+**Why.** The review draft answers the old message. Approving it after the
+customer said something new is the same race as D4, through a human.
+
+**Trade-off.** A reviewer may lose a half-written edit. Safety of the persona
+wins; the new review carries the full thread.
+
+## D14 — Human text is validated against the state, not against nothing
+
+**Decision.** `outbound_guard(state)` derives forbidden actions from the current
+conversation: opt-out forbids all outbound; suppression or an open issue forbids
+every campaign action; a committed referral forbids a referral ask; anything
+already presented cannot be repeated. Human-approved text, campaign text, and
+follow-up text are validated against it.
+
+**Why.** "Approval does not bypass the guardrails" was true for money terms and
+URLs but not for campaign rules, which were enforced only through the pipeline's
+own policy outcome. The Maya rule must hold no matter who wrote the text.
+
+## D15 — Campaign steps are requests, decided by the engine
+
+**Decision.** A campaign trigger (`POST /conversations/{id}/campaigns`, or a
+`CAMPAIGN_TRIGGERED` event with a `kind`) is a request. `campaign_check` decides
+it deterministically, and the copy comes from client-approved templates — not
+the model. A `referral_ask` for a customer who already committed becomes a
+`referral_link` built from the client template and *that* contact's id.
+
+**Why.** This is the other half of both failure stories: the existing timer
+system keeps firing, but it can no longer pitch Maya or re-pitch John, and the
+link John receives is his.
+
+**Trade-off.** Campaign copy is less varied than generated text. Accepted: it is
+marketing copy the client approves once.
+
+## D16 — Opt-out detection does not depend on the model
+
+**Decision.** `policy/optout.py` runs on every inbound message. If it matches and
+the model did not flag an opt-out, the pipeline sets the opt-out entity and the
+policy's `R_STOP_OPTOUT` rule fires. With a real model, the rule classifier is
+the fallback during an outage, and any provider error forces human review.
+
+**Why.** Honouring STOP is a legal obligation. A model that misreads "thanks, but
+please don't text me again" must not be able to cause a TCPA violation.
+
+**Trade-off.** The backstop list is narrow (carrier keywords as the whole
+message, explicit phrases) to avoid false opt-outs from "they didn't stop working".
+
+## D17 — Send worker: claim, send, finalise; at-most-once delivery
+
+**Decision.** The worker commits `SENDING` before the network call and records
+the result after it. Transport errors retry with exponential backoff up to
+`sending.max_attempts`. A message stuck in `SENDING` (worker died mid-call) is
+marked `FAILED`, never retried automatically.
+
+**Why.** The database lock must never be held across network I/O, two workers
+must never send the same message, and a duplicate SMS is worse than a missing
+one that a person can resend.
+
+## D18 — Quiet hours in the recipient's timezone
+
+**Decision.** The send window defaults to 08:15–20:30 and is evaluated in the
+client's IANA timezone (`zoneinfo`), at planning time and again at send time.
+
+**Why.** The previous 07:15 morning window was earlier than the US TCPA 8am
+limit, and a fixed UTC offset is wrong for half of the year.
+

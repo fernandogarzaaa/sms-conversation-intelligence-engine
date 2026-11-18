@@ -1,7 +1,7 @@
 # Synthetic evaluation data
 
-**Everything in this folder is invented for evaluation. It is NOT real the business
-customer data and makes no claims about real the business customers.**
+**Everything in this folder is invented for evaluation. It is NOT real
+customer data and makes no claims about real customers.**
 
 `inbound_messages.jsonl` — 125 labeled inbound SMS bodies, one JSON object per
 line:

@@ -4,14 +4,12 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-import pytest
-
 from sms_engine.application.config import AutomationConfig
 from sms_engine.context.packs import default_context
 from sms_engine.domain.classification import Classification, IntentPrediction
 from sms_engine.domain.entities import Entities
 from sms_engine.domain.enums import IntentType, RiskLevel, RoutingDecision, SuppressionReason
-from sms_engine.domain.state import ConversationState, OpenIssue, Offer
+from sms_engine.domain.state import ConversationState, Offer, OpenIssue
 from sms_engine.policy import actions as A
 from sms_engine.policy.engine import PolicyEngine, PolicyInput
 

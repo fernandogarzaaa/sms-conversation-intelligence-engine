@@ -7,8 +7,7 @@ from pathlib import Path
 
 from sms_engine.context.ingestion import ContextIngestor, RawClientSources
 from sms_engine.domain.context import ClientContext
-
-_DATA_DIR = Path(__file__).resolve().parents[3] / "data" / "clients"
+from sms_engine.infrastructure.paths import clients_dir
 
 
 def load_raw(path: str | Path) -> RawClientSources:
@@ -28,9 +27,10 @@ def load_client_context(path: str | Path) -> ClientContext:
     return ContextIngestor().ingest(load_raw(path))
 
 
-def all_seed_contexts(data_dir: Path = _DATA_DIR) -> list[ClientContext]:
-    return [load_client_context(p) for p in sorted(data_dir.glob("*_raw.json"))]
+def all_seed_contexts(data_dir: Path | str | None = None) -> list[ClientContext]:
+    d = Path(data_dir) if data_dir else clients_dir()
+    return [load_client_context(p) for p in sorted(d.glob("*_raw.json"))]
 
 
 def default_context() -> ClientContext:
-    return load_client_context(_DATA_DIR / "greenline_raw.json")
+    return load_client_context(clients_dir() / "greenline_raw.json")

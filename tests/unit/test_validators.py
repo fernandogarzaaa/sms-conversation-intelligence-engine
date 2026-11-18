@@ -4,14 +4,11 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-import pytest
-
 from sms_engine.context.packs import default_context
 from sms_engine.domain.context import RetrievedContext
-from sms_engine.domain.enums import RiskLevel, RoutingDecision, ValidationCode
+from sms_engine.domain.enums import RiskLevel, RoutingDecision, SuppressionReason, ValidationCode
 from sms_engine.domain.policy import PolicyOutcome
 from sms_engine.domain.state import ConversationState, Suppression
-from sms_engine.domain.enums import SuppressionReason
 from sms_engine.policy import actions as A
 from sms_engine.validation.engine import ResponseValidator, ValidationContext
 

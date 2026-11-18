@@ -25,6 +25,8 @@ class Classification(BaseModel):
     model_used: str = "unknown"
     latency_ms: float = 0.0
     raw: str = ""  # raw provider payload, for observability
+    # set when the provider failed and this is a fail-safe empty classification
+    error: str | None = None
 
     def types(self) -> set[IntentType]:
         return {i.type for i in self.intents}

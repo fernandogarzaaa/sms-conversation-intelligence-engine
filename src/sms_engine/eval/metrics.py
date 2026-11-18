@@ -28,6 +28,15 @@ class OperationalMetrics:
     avg_classification_confidence: float = 0.0
     avg_pipeline_latency_ms: float = 0.0
     responses_invalidated: int = 0
+    reviews_superseded: int = 0
+    processing_failures: int = 0
+    outbound_failed: int = 0
+    campaigns_triggered: int = 0
+    campaigns_allowed: int = 0
+    campaigns_blocked: int = 0
+    campaign_block_reasons: dict = field(default_factory=dict)
+    planned_by_status: dict = field(default_factory=dict)
+    followups_by_status: dict = field(default_factory=dict)
     followups_scheduled: int = 0
     routing_breakdown: dict = field(default_factory=dict)
     by_intent: dict = field(default_factory=dict)
@@ -86,6 +95,32 @@ class MetricsService:
             "SELECT COUNT(*) n FROM events WHERE type='RESPONSE_INVALIDATED'"
         ).fetchone()["n"]
         m.followups_scheduled = c.execute("SELECT COUNT(*) n FROM followups").fetchone()["n"]
+        m.followups_by_status = {
+            r["status"]: r["n"]
+            for r in c.execute("SELECT status, COUNT(*) n FROM followups GROUP BY status").fetchall()
+        }
+        m.planned_by_status = {
+            r["status"]: r["n"]
+            for r in c.execute("SELECT status, COUNT(*) n FROM planned_responses GROUP BY status").fetchall()
+        }
+        ev_counts = {
+            r["type"]: r["n"]
+            for r in c.execute("SELECT type, COUNT(*) n FROM events GROUP BY type").fetchall()
+        }
+        m.reviews_superseded = ev_counts.get("REVIEW_SUPERSEDED", 0)
+        m.processing_failures = ev_counts.get("PROCESSING_FAILED", 0)
+        m.outbound_failed = ev_counts.get("RESPONSE_FAILED", 0)
+        for r in c.execute("SELECT payload_json FROM events WHERE type='CAMPAIGN_TRIGGERED'").fetchall():
+            pl = json.loads(r["payload_json"] or "{}")
+            if "allowed" not in pl:
+                continue  # a bare trigger from an external system, not a decision
+            m.campaigns_triggered += 1
+            if pl.get("allowed"):
+                m.campaigns_allowed += 1
+            else:
+                m.campaigns_blocked += 1
+                reason = str(pl.get("reason", "unknown"))
+                m.campaign_block_reasons[reason] = m.campaign_block_reasons.get(reason, 0) + 1
 
         m.reviews_open = c.execute("SELECT COUNT(*) n FROM reviews WHERE status='OPEN'").fetchone()["n"]
         decided = c.execute("SELECT action FROM reviews WHERE status='DECIDED'").fetchall()

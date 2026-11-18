@@ -121,20 +121,40 @@ class ResponseValidator:
             reject(ValidationCode.OVERREACHING_COMMITMENT, f"Response over-commits to an action Agent can't guarantee: '{m.group(0)}'.", m.group(0))
 
         # --- policy-forbidden actions performed by the draft -----------------
+        why = self._why_campaign_forbidden(ctx)
         for act in ctx.actions:
             if ctx.policy.forbids(act):
-                code = ValidationCode.REPEATS_PRESENTED_OFFER if act.startswith("repeat_offer:") else ValidationCode.FORBIDDEN_PHRASE
-                if act == A.REFERRAL_ASK:
+                if act.startswith("repeat_offer:"):
+                    code = ValidationCode.REPEATS_PRESENTED_OFFER
+                elif act == A.REFERRAL_ASK and (ctx.state.referral_already_committed or not why):
                     code = ValidationCode.REFERRAL_ASK_AFTER_COMMIT
-                reject(code, f"Draft performs a policy-forbidden action: '{act}'.")
+                elif act in A.CAMPAIGN_ACTIONS:
+                    code = ValidationCode.CAMPAIGN_ACTION_FORBIDDEN
+                else:
+                    code = ValidationCode.FORBIDDEN_PHRASE
+                reject(code, f"Draft performs a policy-forbidden action: '{act}'{why}.")
 
         # heuristic: a referral *ask* phrasing while referral_ask is forbidden
         if ctx.policy.forbids(A.REFERRAL_ASK) and re.search(
             r"\b(could you|would you|mind) (refer|recommend|passing|sharing)|"
-            r"\brefer (a friend|someone|us)\b|\bknow anyone who\b|\bsend them our way\b",
+            r"\brefer (a friend|someone|us)\b|\bknow anyone who\b|\bknow anyone (else )?(that|looking)|"
+            r"\bsend them our way\b",
             low,
         ):
-            reject(ValidationCode.REFERRAL_ASK_AFTER_COMMIT, "Response asks for a referral, which policy forbids here.")
+            if ctx.state.referral_already_committed or not why:
+                reject(ValidationCode.REFERRAL_ASK_AFTER_COMMIT,
+                       "Response asks for a referral, but the customer already offered to refer.")
+            else:
+                reject(ValidationCode.CAMPAIGN_ACTION_FORBIDDEN, f"Response asks for a referral{why}.")
+
+        # heuristic: review-request phrasing while review_request is forbidden
+        # (catches a human edit that adds "leave us a review" to a Maya-type thread)
+        if ctx.policy.forbids(A.REVIEW_REQUEST) and A.REVIEW_REQUEST not in ctx.actions and re.search(
+            r"\b(leave|write|post|drop) (us )?(a |an )?(quick |short )?(review|rating)\b|"
+            r"\breview (us|link)\b|\brate us\b",
+            low,
+        ):
+            reject(ValidationCode.CAMPAIGN_ACTION_FORBIDDEN, f"Response asks for a review{why or ', which policy forbids here'}.")
 
         # --- grounding for question answers ---------------------------------
         if A.ANSWER_QUESTION in ctx.actions and not ctx.retrieved.grounded:
@@ -150,6 +170,18 @@ class ResponseValidator:
 
         passed = not any(f.severity == "reject" for f in findings)
         return ValidationResult(passed=passed, findings=findings)
+
+    @staticmethod
+    def _why_campaign_forbidden(ctx: ValidationContext) -> str:
+        st = ctx.state
+        if st.opted_out:
+            return " (the contact opted out)"
+        if st.has_unresolved_issue:
+            return " while an issue is still open"
+        if st.suppression.active:
+            reason = st.suppression.reason.value if st.suppression.reason else "active"
+            return f" while the contact is suppressed ({reason})"
+        return ""
 
     @staticmethod
     def ctx_forbids_all_outbound(ctx: ValidationContext) -> bool:

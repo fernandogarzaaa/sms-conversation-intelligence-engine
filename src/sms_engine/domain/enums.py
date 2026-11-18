@@ -42,6 +42,12 @@ class RoutingDecision(str, Enum):
     ESCALATE = "ESCALATE"
 
 
+class ReviewKind(str, Enum):
+    REPLY = "REPLY"          # a reply to an inbound customer message
+    CAMPAIGN = "CAMPAIGN"    # a campaign step held for approval
+    FOLLOWUP = "FOLLOWUP"    # outreach on a volunteered future need
+
+
 class ReviewAction(str, Enum):
     APPROVE = "APPROVE"
     EDIT_AND_SEND = "EDIT_AND_SEND"
@@ -90,6 +96,9 @@ class ValidationCode(str, Enum):
     REPEATS_PRESENTED_OFFER = "REPEATS_PRESENTED_OFFER"
     REFERRAL_ASK_AFTER_COMMIT = "REFERRAL_ASK_AFTER_COMMIT"
     UNGROUNDED_ANSWER = "UNGROUNDED_ANSWER"
+    # a campaign action (referral ask, review request, promo, ...) while an issue is
+    # open or the contact is suppressed
+    CAMPAIGN_ACTION_FORBIDDEN = "CAMPAIGN_ACTION_FORBIDDEN"
 
 
 class EventType(str, Enum):
@@ -108,3 +117,9 @@ class EventType(str, Enum):
     SUPPRESSION_RELEASED = "SUPPRESSION_RELEASED"
     SCHEDULED_FOLLOWUP = "SCHEDULED_FOLLOWUP"
     ESCALATED = "ESCALATED"
+    # added in v0.2
+    RESPONSE_FAILED = "RESPONSE_FAILED"          # transport gave up delivering
+    REVIEW_SUPERSEDED = "REVIEW_SUPERSEDED"      # a newer inbound made an open review stale
+    ISSUE_RESOLVED = "ISSUE_RESOLVED"            # staff marked an open issue resolved
+    FOLLOWUP_DUE = "FOLLOWUP_DUE"                # a scheduled follow-up reached its due date
+    PROCESSING_FAILED = "PROCESSING_FAILED"      # analysis crashed; message routed to a human

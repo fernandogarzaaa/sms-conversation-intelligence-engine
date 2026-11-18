@@ -7,7 +7,8 @@ module, so a fixed seed makes their output reproducible.
 from __future__ import annotations
 
 import random
-from typing import Sequence, TypeVar
+from collections.abc import Sequence
+from typing import TypeVar
 
 T = TypeVar("T")
 
@@ -21,7 +22,7 @@ class Rng:
         self._seed = seed
         self._r = random.Random(seed)
 
-    def derived(self, salt: str) -> "Rng":
+    def derived(self, salt: str) -> Rng:
         """A child RNG deterministically derived from this one + a salt string."""
         return Rng(f"{self._seed}:{salt}")
 

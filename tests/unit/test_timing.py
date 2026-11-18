@@ -35,7 +35,6 @@ def test_question_gets_fast_bucket():
 def test_night_message_is_held_to_morning():
     now = datetime(2026, 8, 21, 4, 0, tzinfo=timezone.utc)  # 23:00 local previous day
     d = _eng().schedule(now, char_len=20, intent_count=1, is_question=False, salt="n")
-    local = d.send_after.astimezone(timezone.utc)  # stored in UTC
     local_hour = (d.send_after.hour - 5) % 24
     assert 7 <= local_hour <= 10
     assert "morning" in d.reason

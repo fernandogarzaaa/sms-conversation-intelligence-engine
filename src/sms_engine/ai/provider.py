@@ -1,19 +1,24 @@
 """LLMProvider abstraction.
 
     LLMProvider (ABC)
-    ├── MockProvider     deterministic, rule-based, no network  (this build)
-    ├── OpenAIProvider   interface-only stub
-    └── LocalProvider    interface-only stub  (future cloud-vs-local comparison)
+    ├── MockProvider              deterministic, rule-based, no network (tests, demo, default)
+    └── HTTPLLMProvider           real models over HTTP  (sms_engine.ai.llm)
+        ├── OpenAICompatibleProvider   /chat/completions
+        │     ├── OpenAIProvider       api.openai.com
+        │     ├── OpenRouterProvider   openrouter.ai
+        │     └── LocalProvider        Ollama / vLLM / LM Studio (cloud-vs-local comparison)
+        └── AnthropicProvider          /v1/messages
 
 Every method returns a `ProviderResponse` carrying the parsed payload, the raw
-text, the model name, and measured latency — so the eval harness can compare
-providers on latency / cost / accuracy without assuming which is better.
+text, the model name, measured latency, and token usage / cost — so the eval
+harness can compare providers on latency / cost / accuracy without assuming
+which is better. Use `sms_engine.ai.factory.provider_from_env()` to pick one.
 """
 
 from __future__ import annotations
 
 import abc
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass
@@ -24,6 +29,8 @@ class ProviderResponse:
     latency_ms: float = 0.0
     # populated only by providers that meter cost; mock leaves it 0
     cost_usd: float = 0.0
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 @dataclass
@@ -49,7 +56,7 @@ class LLMProvider(abc.ABC):
 
     @abc.abstractmethod
     def classify_intents(self, text: str, state_summary: dict) -> ProviderResponse:
-        """Return {"intents": [{"type","confidence","rationale"}], "entities": {..}}."""
+        """Return {"intents": [{"type","confidence","rationale"}], "entities": {..}, "flags": {..}}."""
 
     @abc.abstractmethod
     def extract_entities(self, text: str, intents: list[str]) -> ProviderResponse:
@@ -60,33 +67,18 @@ class LLMProvider(abc.ABC):
         """Return {"text": str, "actions": [str, ...]}."""
 
 
-class NotConfiguredProvider(LLMProvider):
-    """Base for real providers that aren't wired in this build."""
-
-    def __init__(self, name: str) -> None:
-        self.name = name
-
-    def _fail(self):
-        raise NotImplementedError(
-            f"{self.name} is an interface-only stub in this build. "
-            "Use MockProvider, or implement this method against the real API."
-        )
-
-    def classify_intents(self, text: str, state_summary: dict) -> ProviderResponse:  # noqa: D401
-        self._fail()
-
-    def extract_entities(self, text: str, intents: list[str]) -> ProviderResponse:
-        self._fail()
-
-    def generate_reply(self, spec: GenerateSpec) -> ProviderResponse:
-        self._fail()
+_LAZY = {
+    "HTTPLLMProvider", "OpenAICompatibleProvider", "OpenAIProvider", "OpenRouterProvider",
+    "LocalProvider", "AnthropicProvider", "LLMError",
+}
 
 
-class OpenAIProvider(NotConfiguredProvider):
-    def __init__(self) -> None:
-        super().__init__("openai")
+def __getattr__(name: str):
+    # Real providers live in sms_engine.ai.llm (which imports this module);
+    # re-export them lazily so `from sms_engine.ai.provider import OpenAIProvider`
+    # keeps working without a circular import.
+    if name in _LAZY:
+        from sms_engine.ai import llm
 
-
-class LocalProvider(NotConfiguredProvider):
-    def __init__(self) -> None:
-        super().__init__("local")
+        return getattr(llm, name)
+    raise AttributeError(name)

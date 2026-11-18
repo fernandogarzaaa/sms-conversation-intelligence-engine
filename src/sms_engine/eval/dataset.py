@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-_DEFAULT = Path(__file__).resolve().parents[3] / "data" / "seed" / "inbound_messages.jsonl"
+from sms_engine.infrastructure.paths import seed_dataset_path
 
 
 @dataclass
@@ -18,7 +18,8 @@ class SeedRow:
     synthetic: bool = True
 
 
-def load_seed(path: str | Path = _DEFAULT) -> list[SeedRow]:
+def load_seed(path: str | Path | None = None) -> list[SeedRow]:
+    path = path or seed_dataset_path()
     rows: list[SeedRow] = []
     for line in Path(path).read_text(encoding="utf-8").splitlines():
         line = line.strip()

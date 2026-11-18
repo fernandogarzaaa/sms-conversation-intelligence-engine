@@ -12,4 +12,11 @@ sms_engine.db-shm
 .claude/
 .env
 .env.*
+!.env.example
 *.db
+.ruff_cache/
+.coverage
+htmlcov/
+config/automation.toml
+build/
+dist/

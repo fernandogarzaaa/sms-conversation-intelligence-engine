@@ -7,14 +7,15 @@ Two ways to demo: **console** (fast, shows decision traces) and **web dashboard*
 
 ```bash
 python -m venv .venv
-.venv/Scripts/python.exe -m pip install -e ".[dev]"     # Windows path shown
-python -m pytest -q                                     # 93 tests, ~1s
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+pip install -e ".[dev]"
+pytest                           # 230 tests, a few seconds
 ```
 
 ## A. Console demo (2 minutes)
 
 ```bash
-python scripts/demo.py
+sms-engine demo                  # same as: python scripts/demo.py
 ```
 
 Runs scenarios A–G. For each step it prints the customer message, detected
@@ -24,7 +25,7 @@ check with PASS/FAIL. Ends with `35/35 scenario checks passed` and a metrics dum
 Run a subset:
 
 ```bash
-python scripts/demo.py maya john
+sms-engine demo maya john
 ```
 
 ### What to point at
@@ -45,7 +46,9 @@ ROUTE: HUMAN_REVIEW
 
 The old system sent a referral pitch here. This one suppresses every campaign
 action, routes to a human, and queues nothing. Checks assert *NO referral ask*,
-*NO review request*, *no automated message sent*.
+*NO review request*, *no automated message sent*. The draft for the reviewer
+reads *"Thanks for the kind words about the crew. I've flagged the grill area for
+the team to sort out."*
 
 **John (scenario C).** One message, three intents + a state mutation:
 
@@ -75,26 +78,38 @@ then re-classifies, re-builds state (now has an open issue), and re-decides.
 ## B. Web dashboard (5 minutes)
 
 ```bash
-python scripts/demo.py --seed-db
-python -m uvicorn sms_engine.api.app:get_app --factory --port 8099
-# open http://127.0.0.1:8099
+sms-engine seed-db               # writes ./sms_engine.db with every flow
+sms-engine serve                 # http://127.0.0.1:8099
 ```
 
-- **Dashboard** (`/`): operational metrics, routing breakdown, the classifier
-  evaluation table (per-intent P/R/F1 over the 125-row synthetic set), the
-  automation-eligibility (learning-loop) table, the review queue, all
-  conversations, and a "simulate an inbound SMS" box.
-- **Inbox** (`/ui/inbox`): everything waiting for a human, risk-ordered.
-- **Review** (`/ui/reviews/{id}`): the full reviewer view — conversation thread,
-  current message, detected intents, extracted entities, conversation state,
-  policy (routing / risk / forbidden / allowed + rule summary), client context,
-  the generated draft with validator findings, and the decision trace. Buttons:
-  **Approve**, **Edit & Send**, **Reject**, **Suppress**, **Escalate**. Every
-  click is stored as evaluation data.
-- **Conversation** (`/ui/conversations/{id}`): full thread, latest decision
-  trace, the append-only event log, and the projected state (identity with
-  previous name, facts with provenance, open issues, future intents/follow-ups),
-  plus manual Suppress / Release.
+The seeded database runs scenarios A–G and then plays the campaign system:
+
+- **John**: the reviewer approves the name-correction reply; the campaign system
+  then asks for a *referral ask*. John already committed, so the engine sends
+  **his own referral link** (`https://ref.greenline.example/scen_john`) instead
+  of the pitch. Open his conversation to see both messages and
+  `Already sent: referral_link`.
+- **Scenario A**: the reply goes out, then a review request.
+- **Maya**: the campaign system asks for a review request. The dashboard's
+  "Why campaign steps were blocked" table shows `contact is suppressed (OPEN_ISSUE)`.
+
+Pages:
+
+- **Dashboard** (`/`): what needs a human, operational metrics (including
+  superseded reviews, campaign steps allowed/blocked, failed sends), routing
+  breakdown, classifier evaluation, the learning-loop table, conversations, a
+  "simulate an inbound SMS" box, and **Run worker pass**.
+- **Inbox** (`/ui/inbox`): everything waiting for a human, risk-ordered —
+  replies, campaign drafts (when review is required), and due follow-ups.
+- **Review** (`/ui/reviews/{id}`): the decision first — what the customer wrote,
+  *why this needs you* in plain language, and the reply to send with **live
+  validation** as you type. Try adding "could you leave us a review?" to Maya's
+  draft: the send button disables and says why. Thread, intents, entities,
+  decision trace, and client context are in collapsible sections below.
+- **Conversation** (`/ui/conversations/{id}`): thread, what is waiting to send,
+  state, issues with **Mark resolved** (optionally releasing the suppression),
+  **campaign step buttons** (the engine tells you if a step is blocked and why),
+  facts with provenance, follow-ups, suppress / release, and the event log.
 
 ### Live simulation
 
@@ -106,11 +121,22 @@ In the dashboard's "simulate an inbound SMS" box, try:
 | `Do you guys move pianos?` | AUTO_REPLY, answer grounded in the pianos FAQ |
 | `How much to haul a couch?` | HUMAN_REVIEW — pricing FAQ is not approved for auto-answer |
 | `The crew was great but the shed is still full` | HUMAN_REVIEW + suppression, nothing queued |
+| …then on the same contact: `They also scratched the dresser` | ESCALATE — two open issues |
 | `Please stop texting me` | SUPPRESS, contact opted out; try a positive message after — still suppressed |
 | `My sister is moving in the fall, might need help` | HUMAN_REVIEW + a scheduled follow-up task |
 
-Then click **Process due send-queue** on the dashboard after the demo clock
-passes a `send_after` to turn planned replies into sent outbound messages.
+Then click **Run worker pass** to send what is due (through the `log` transport;
+nothing leaves the machine) and turn due follow-ups into reviews.
+
+### Against a real model
+
+```bash
+SMS_ENGINE_PROVIDER=openrouter SMS_ENGINE_MODEL=<model> SMS_ENGINE_API_KEY=<key> sms-engine serve
+SMS_ENGINE_PROVIDER=openrouter SMS_ENGINE_MODEL=<model> SMS_ENGINE_API_KEY=<key> sms-engine eval --mismatches
+```
+
+The decisions do not change shape: the model only proposes intents and writes
+drafts; the same policy, validators, and review queue apply.
 
 ## C. API (for the engineering audience)
 
@@ -123,10 +149,17 @@ Returns the full decision: intents, entities, policy outcome, retrieved context,
 draft, validation, planned response (if any), review id, follow-ups,
 `state_after`, and the rendered `decision_trace`.
 
-Other endpoints: `GET /conversations/{id}`, `/conversations/{id}/state`,
-`/conversations/{id}/trace`, `POST /conversations/{id}/review|suppress|release`,
-`GET /review-queue`, `GET /metrics`, `GET /eval/classifier`,
-`GET /eval/automation-eligibility`, `POST /events`.
+Campaign step (try it on Maya's conversation id, then on a positive one):
+
+```bash
+curl -s localhost:8099/conversations/<id>/campaigns -H 'content-type: application/json' \
+  -d '{"kind":"review_request","dry_run":true}' | python -m json.tool
+```
+
+Idempotency — send the same `provider_message_id` twice; the second response has
+`"duplicate": true` and nothing new is stored.
+
+The full endpoint list is in the README and at `/docs`.
 
 ## The one-line takeaway
 
